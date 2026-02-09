@@ -1,4 +1,4 @@
-# vwh
+# vwh - Victor Was Here
 
 A public inspector for `.vwh` accountability artifacts.
 
