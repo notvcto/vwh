@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vwh-core",
+    "crates/vwh",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Victor Soto"]
+license = "MIT"
+
+[workspace.dependencies]
+# Crypto
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+blake3 = "1.5"
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+zeroize = "1.7"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+hex = "0.4"
+directories = "5.0"
+
+# HTTP (public inspector only)
+reqwest = { version = "0.11", features = ["blocking", "json"] }
