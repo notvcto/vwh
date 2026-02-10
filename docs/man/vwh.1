@@ -1,0 +1,193 @@
+.TH VWH 1 "2026-02-09" "VWH v1.0" "User Commands"
+.SH NAME
+vwh \- Victor Was Here artifact inspector
+.SH SYNOPSIS
+.B vwh inspect
+.I FILE
+.RB [ \-\-offline ]
+.RB [ \-\-registry
+.IR URL ]
+.SH DESCRIPTION
+.B vwh
+is the public inspector for VWH (Victor Was Here) artifacts. It verifies cryptographic signatures and checks optional trust registry status.
+.PP
+VWH provides cryptographic proof of work authorization through Ed25519 signatures and immutable .vwh artifact files. The inspector performs local signature verification and optionally consults a network registry for trust status.
+.SH COMMANDS
+.TP
+.B inspect
+.I FILE
+Inspect and verify a .vwh artifact file. This command:
+.RS
+.IP \(bu 2
+Parses the binary artifact format
+.IP \(bu
+Verifies Ed25519 signature cryptographically
+.IP \(bu
+Checks SEAL flag consistency
+.IP \(bu
+Optionally queries network registry for trust status
+.IP \(bu
+Displays complete artifact information
+.RE
+.SH OPTIONS
+.TP
+.B \-\-offline
+Skip network registry check. Performs only local cryptographic verification. Useful for offline environments or when registry is unavailable.
+.TP
+.BR \-\-registry " " \fIURL\fR
+Use custom registry base URL instead of default. The registry must provide:
+.RS
+.IP \(bu 2
+\fIURL\fR/keys.json
+.IP \(bu
+\fIURL\fR/ledger.json
+.RE
+.SH ENVIRONMENT
+.TP
+.B VWH_REGISTRY_URL
+Default registry base URL if not specified with --registry flag. Default value is https://notvc.to/vwh-registry
+.SH ARTIFACT STATES
+Artifacts have three possible states:
+.TP
+.B DRAFT
+Unsigned artifact. Cannot be verified. Must be signed before distribution.
+.TP
+.B SIGNED
+Signed but not sealed. Signature is valid. Can still be unsealed by author.
+.TP
+.B SEALED
+Signed and sealed. Immutable forever. Cannot be unsealed or modified.
+.SH VERIFICATION FLOW
+The inspector follows this verification flow:
+.IP 1. 3
+Parse binary format and extract fields
+.IP 2.
+Check SEAL flag consistency (sealed artifacts must be signed)
+.IP 3.
+Verify Ed25519 signature (AUTHORITATIVE - never skipped)
+.IP 4.
+If online, query registry for:
+.RS
+.IP \(bu 2
+Key recognition and status
+.IP \(bu
+Artifact ledger status (active/revoked)
+.RE
+.IP 5.
+Display results with clear trust indicators
+.SH TRUST MODEL
+VWH uses a two-tier trust model:
+.TP
+.B Cryptographic Validity (Authoritative)
+Local Ed25519 signature verification. This is the authoritative source of artifact integrity and cannot be overridden by registry data.
+.TP
+.B Registry Trust Status (Advisory)
+Network registry provides advisory information:
+.RS
+.IP \(bu 2
+Is signing key recognized?
+.IP \(bu
+Has key been revoked?
+.IP \(bu
+Has artifact been publicly acknowledged or revoked?
+.RE
+.PP
+Registry failure or unavailability NEVER invalidates a cryptographically valid signature.
+.SH OUTPUT
+The inspector displays:
+.IP \(bu 2
+File information (path, size)
+.IP \(bu
+Artifact metadata (ID, intent, timestamp, state)
+.IP \(bu
+Cryptographic verification status
+.IP \(bu
+SEAL flag status
+.IP \(bu
+Registry trust status (if online)
+.IP \(bu
+Key recognition and status
+.IP \(bu
+Ledger status if applicable
+.SH EXIT STATUS
+.TP
+.B 0
+Success. All verifications passed.
+.TP
+.B 1
+Error. Verification failed or file could not be read.
+.SH EXAMPLES
+.TP
+.B Inspect with default registry:
+.nf
+vwh inspect artifact.vwh
+.fi
+.TP
+.B Inspect offline:
+.nf
+vwh inspect artifact.vwh --offline
+.fi
+.TP
+.B Use custom registry:
+.nf
+vwh inspect artifact.vwh --registry https://example.com/registry
+.fi
+.TP
+.B Use environment variable:
+.nf
+export VWH_REGISTRY_URL=https://example.com/registry
+vwh inspect artifact.vwh
+.fi
+.SH FILES
+No local files are used by the inspector. All verification is based on the artifact file and optional network registry.
+.SH SECURITY
+.TP
+.B Network Security
+The inspector uses HTTPS with strict settings:
+.RS
+.IP \(bu 2
+5-second timeout
+.IP \(bu
+No redirect following (security)
+.IP \(bu
+All network errors treated as "registry unavailable"
+.RE
+.TP
+.B Cryptographic Security
+.RS
+.IP \(bu 2
+Ed25519 signatures (32-byte keys, 64-byte signatures)
+.IP \(bu
+BLAKE3 hashing for artifact IDs and key fingerprints
+.IP \(bu
+Constant-time signature verification
+.RE
+.SH DIAGNOSTICS
+The inspector provides clear diagnostic messages:
+.TP
+.B ✓
+Success indicator (green checkmark)
+.TP
+.B ✗
+Failure indicator (red X)
+.TP
+.B ⚠
+Warning indicator (yellow warning sign)
+.TP
+.B ℹ
+Information indicator (blue info sign)
+.TP
+.B ⊗
+Revocation indicator (crossed circle)
+.SH SEE ALSO
+.BR vwh-author (1)
+.PP
+Full documentation: /usr/share/doc/vwh/README.md
+.PP
+Specification: /usr/share/doc/vwh/SPEC.md
+.SH AUTHOR
+Written for the VWH project.
+.SH BUGS
+Report bugs to: [project bug tracker]
+.SH COPYRIGHT
+Copyright © 2026. License information: [license]

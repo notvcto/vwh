@@ -65,3 +65,4 @@ mod tests {
         assert!(verify(&public_key, wrong_message, &signature).is_err());
     }
 }
+

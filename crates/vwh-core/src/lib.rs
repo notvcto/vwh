@@ -4,7 +4,7 @@ pub mod format;
 pub mod verify;
 
 pub use error::{Error, Result};
-pub use format::{Artifact, MAGIC};
+pub use format::{Artifact, ArtifactState, FLAG_SEALED, MAGIC};
 
 // ArtifactId, Intent, KeyFingerprint are defined in this module and exported below
 
@@ -159,3 +159,4 @@ pub enum RevocationReason {
     AccessRevoked,
     Other,
 }
+

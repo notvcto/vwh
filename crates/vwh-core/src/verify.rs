@@ -42,3 +42,4 @@ mod tests {
         assert!(verify_artifact(&artifact).is_err());
     }
 }
+

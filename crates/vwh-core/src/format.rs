@@ -6,6 +6,23 @@ pub const MAGIC: &[u8; 4] = b"VWH\0";
 pub const VERSION: u16 = 1;
 pub const MIN_ARTIFACT_SIZE: usize = 4 + 2 + 1 + 16 + 8 + 1 + 32 + 64; // 128 bytes
 
+// FLAGS byte bit definitions
+pub const FLAG_SEALED: u8 = 0b00000001;  // Bit 0: SEAL flag
+
+// Keyless draft marker - used for drafts not yet bound to a key
+pub const ZERO_PUBKEY: [u8; 32] = [0u8; 32];
+
+/// Artifact state
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactState {
+    /// Unsigned draft - can be edited
+    Draft,
+    /// Signed but not sealed - can be unsealed
+    Signed,
+    /// Signed and sealed - immutable
+    Sealed,
+}
+
 /// Complete artifact structure
 #[derive(Debug, Clone)]
 pub struct Artifact {
@@ -21,7 +38,8 @@ pub struct Artifact {
 impl Artifact {
     /// Parse artifact from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() < MIN_ARTIFACT_SIZE {
+        // v1 artifacts must be EXACTLY 128 bytes (no trailing data allowed)
+        if bytes.len() != MIN_ARTIFACT_SIZE {
             return Err(Error::FileTooSmall {
                 expected: MIN_ARTIFACT_SIZE,
                 actual: bytes.len(),
@@ -90,8 +108,13 @@ impl Artifact {
     }
 
     /// Get bytes that were signed (everything before signature)
+    /// 
+    /// IMPORTANT: FLAGS is NOT included in signing bytes because it represents
+    /// artifact state (sealed/unsealed), not artifact identity. This allows
+    /// sealing to be a state transition that doesn't invalidate the signature.
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(MIN_ARTIFACT_SIZE - 64);
+        // Capacity: 128 total - 64 signature - 1 flags = 63 bytes
+        let mut bytes = Vec::with_capacity(63);
 
         // Magic
         bytes.extend_from_slice(MAGIC);
@@ -99,8 +122,7 @@ impl Artifact {
         // Version (LE)
         bytes.extend_from_slice(&self.version.to_le_bytes());
 
-        // Flags
-        bytes.push(self.flags);
+        // FLAGS NOT INCLUDED - it's state metadata, not signed identity
 
         // Artifact ID
         bytes.extend_from_slice(&self.artifact_id.0);
@@ -117,10 +139,34 @@ impl Artifact {
         bytes
     }
 
-    /// Serialize artifact to bytes
+    /// Serialize artifact to bytes (128 bytes total)
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.signing_bytes();
+        let mut bytes = Vec::with_capacity(MIN_ARTIFACT_SIZE);
+        
+        // Magic (4 bytes)
+        bytes.extend_from_slice(MAGIC);
+        
+        // Version (2 bytes, LE)
+        bytes.extend_from_slice(&self.version.to_le_bytes());
+        
+        // FLAGS (1 byte) - WRITTEN but NOT SIGNED
+        bytes.push(self.flags);
+        
+        // Artifact ID (16 bytes)
+        bytes.extend_from_slice(&self.artifact_id.0);
+        
+        // Timestamp (8 bytes, LE)
+        bytes.extend_from_slice(&(self.timestamp.timestamp() as u64).to_le_bytes());
+        
+        // Intent (1 byte)
+        bytes.push(self.intent.to_u8());
+        
+        // Author public key (32 bytes)
+        bytes.extend_from_slice(&self.author_pubkey);
+        
+        // Signature (64 bytes)
         bytes.extend_from_slice(&self.signature);
+        
         bytes
     }
 
@@ -140,6 +186,50 @@ impl Artifact {
     /// Get author key fingerprint
     pub fn author_fingerprint(&self) -> KeyFingerprint {
         KeyFingerprint::new(&self.author_pubkey)
+    }
+    
+    /// Check if artifact is sealed
+    pub fn is_sealed(&self) -> bool {
+        (self.flags & FLAG_SEALED) != 0
+    }
+    
+    /// Check if artifact has a signature (may be invalid)
+    pub fn has_signature(&self) -> bool {
+        self.signature != [0u8; 64]
+    }
+    
+    /// Check if artifact has an author public key (keyless draft = all zeros)
+    pub fn has_author_pubkey(&self) -> bool {
+        self.author_pubkey != ZERO_PUBKEY
+    }
+    
+    /// Determine artifact state
+    pub fn state(&self) -> ArtifactState {
+        if !self.has_signature() {
+            ArtifactState::Draft
+        } else if self.is_sealed() {
+            ArtifactState::Sealed
+        } else {
+            ArtifactState::Signed
+        }
+    }
+    
+    /// Set seal flag (returns new artifact with flag set)
+    pub fn with_seal_flag(mut self) -> Self {
+        self.flags |= FLAG_SEALED;
+        self
+    }
+    
+    /// Clear seal flag (returns new artifact with flag cleared)
+    pub fn without_seal_flag(mut self) -> Self {
+        self.flags &= !FLAG_SEALED;
+        self
+    }
+    
+    /// Remove signature (returns artifact with zero signature)
+    pub fn without_signature(mut self) -> Self {
+        self.signature = [0u8; 64];
+        self
     }
 }
 
@@ -203,12 +293,16 @@ pub struct UnsignedArtifact {
 
 impl UnsignedArtifact {
     /// Get bytes to sign
+    /// 
+    /// IMPORTANT: FLAGS is NOT included in signing bytes (same as Artifact).
+    /// This allows sealing to be a state transition without re-signing.
     pub fn signing_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(MIN_ARTIFACT_SIZE - 64);
+        // Capacity: 128 total - 64 signature - 1 flags = 63 bytes
+        let mut bytes = Vec::with_capacity(63);
 
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&self.version.to_le_bytes());
-        bytes.push(self.flags);
+        // FLAGS NOT INCLUDED - consistent with Artifact::signing_bytes()
         bytes.extend_from_slice(&self.artifact_id.0);
         bytes.extend_from_slice(&(self.timestamp.timestamp() as u64).to_le_bytes());
         bytes.push(self.intent.to_u8());
@@ -282,3 +376,4 @@ mod tests {
         ));
     }
 }
+
