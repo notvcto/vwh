@@ -1,5 +1,7 @@
 # VWH (Victor Was Here)
 
+[![Crate](https://img.shields.io/crates/v/vwh.svg)](https://crates.io/crates/vwh)
+
 VWH is a cryptographic artifact format and public inspector for proving that a specific intent was recorded at a point in time. Artifacts are immutable once signed, and verification works offline. A network registry is optional and advisory.
 
 This repository contains only public components:
