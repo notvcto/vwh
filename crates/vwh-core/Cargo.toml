@@ -1,9 +1,15 @@
 [package]
 name = "vwh-core"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
+version = "1.0.0"
+authors = ["Victor Enrique Soto <contact@notvc.to>"]
+edition = "2021"
+description = "Cryptographic accountability tool for verifying digital presence."
+license = "MIT"
+repository = "https://github.com/notvcto/vwh"
+homepage = "https://notvc.to"
+keywords = ["security", "verification", "cryptography", "cli", "provenance"]
+categories = ["command-line-utilities", "cryptography"]
+readme = "README.md"
 
 [dependencies]
 ed25519-dalek.workspace = true

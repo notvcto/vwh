@@ -730,9 +730,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.180"
+version = "0.2.181"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
+checksum = "459427e2af2b9c839b132acb702a1c654d95e10f8c326bfc2ad11310e458b1c5"
 
 [[package]]
 name = "litemap"
@@ -1345,7 +1345,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vwh"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "vwh-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "chrono",
