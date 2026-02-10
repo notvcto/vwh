@@ -39,4 +39,4 @@ hex = "0.4"
 directories = "5.0"
 
 # HTTP (public inspector only)
-reqwest = { version = "0.11", features = ["blocking", "json"] }
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
