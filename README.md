@@ -37,6 +37,16 @@ target/release/vwh
 
 **Usage**
 
+Binary name by OS:
+
+- macOS/Linux: `vwh`
+- Windows: `vwh.exe`
+
+If running from build output:
+
+- macOS/Linux: `./target/release/vwh`
+- Windows (PowerShell): `.\target\release\vwh.exe`
+
 Inspect a file:
 
 ```bash
@@ -60,6 +70,20 @@ Or via environment variable:
 ```bash
 export VWH_REGISTRY_URL=https://example.com/registry
 vwh inspect artifact.vwh
+```
+
+Windows (PowerShell):
+
+```powershell
+$env:VWH_REGISTRY_URL = "https://example.com/registry"
+vwh.exe inspect artifact.vwh
+```
+
+Windows (CMD):
+
+```cmd
+set VWH_REGISTRY_URL=https://example.com/registry
+vwh.exe inspect artifact.vwh
 ```
 
 **Registry (Optional)**
