@@ -1,6 +1,6 @@
 [package]
 name = "vwh"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Victor Enrique Soto <contact@notvc.to>"]
 edition = "2021"
 description = "Cryptographic accountability tool for verifying digital presence."
