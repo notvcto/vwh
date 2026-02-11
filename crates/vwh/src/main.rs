@@ -142,9 +142,24 @@ fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result
     println!("File: {}", file.display());
     println!("Size: {} bytes\n", bytes.len());
     
-    // Parse artifact
-    let artifact = Artifact::from_bytes(&bytes)
-        .context("Failed to parse artifact")?;
+    // Parse artifact (with v2 detection)
+    let artifact = match Artifact::from_bytes(&bytes) {
+        Ok(art) => art,
+        Err(vwh_core::Error::UnsupportedVersion(2)) => {
+            print_sep();
+            println!("VWH v2 Format Detected\n");
+            println!("  This artifact uses the VWH v2 format (256 bytes).");
+            println!("  This inspector only supports VWH v1 (128 bytes).\n");
+            println!("  To inspect v2 artifacts, please upgrade to vwh v2.x:");
+            println!("  cargo install vwh --version ^2.0\n");
+            print_sep();
+            return Ok(());
+        },
+        Err(vwh_core::Error::UnsupportedVersion(ver)) => {
+            anyhow::bail!("Unsupported VWH version: {}", ver);
+        },
+        Err(e) => return Err(e).context("Failed to parse artifact"),
+    };
     
     print_sep();
     println!("Artifact Information:\n");

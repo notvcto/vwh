@@ -5,6 +5,21 @@ All notable changes to the VWH project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-02-11
+
+### Added
+
+#### vwh (Public Inspector)
+
+- VWH v2 format detection with graceful error message
+- Clear upgrade instructions when v2 artifacts are encountered
+- Forward compatibility preparation for v2.0.0 release
+
+### Changed
+
+- Inspector now detects v2 artifacts (256 bytes) and provides helpful upgrade guidance
+- No functional changes to v1 artifact inspection
+
 ## [1.0.0] - 2026-02-10
 
 ### Added
@@ -109,16 +124,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Minimum size: 128 bytes
 - Fixed field layout (see SPEC.md)
 - Signature over all fields except signature itself
-
-## [Unreleased]
-
-### Planned for Future Milestones
-
-- Key rotation workflow
-- Key revocation
-- Artifact revocation CLI
-- Encrypted payload support
-- Private artifact registry
-- File integrity hash tracking
-- Export commands for registry updates
-- Hardware token support (YubiKey)
