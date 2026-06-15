@@ -5,36 +5,106 @@ All notable changes to the VWH project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.2] - 2026-02-11
-
-### Changed
-
-#### vwh (Public Inspector)
-
-- Registry URLs now use versioned paths: `/v1/keys.json` and `/v1/ledger.json`
-- Prepares infrastructure for future v2 registry at `/v2/`
-- No functional changes to artifact inspection
-
-### Migration Notes
-
-If you host your own registry, update your paths:
-- Old: `https://example.com/vwh-registry/keys.json`
-- New: `https://example.com/vwh-registry/v1/keys.json`
-
-## [1.0.1] - 2026-02-11
+## [2.0.0] - 2026-03-05
 
 ### Added
 
+#### vwh-core (Shared Library)
+
+- **V2 Format (256 bytes fixed)**: Complete rewrite supporting dual signatures and detached notes
+- Dual signature model: Author signature (103 bytes coverage) + Seal signature (192 bytes coverage)
+- Note hash field: BLAKE3 hash of detached `.vwh.note` file
+- `ArtifactVersion` enum for clean v1/v2 separation
+- `ArtifactBuilder::new_v2()` for creating v2 artifacts with note hash
+- `seal_signing_bytes()` for seal signature coverage calculation
+- `seal_fingerprint()` to retrieve seal key fingerprint from v2 artifacts
+- `has_note_hash()` to detect presence of note in v2 artifacts
+- `with_seal()` and `without_seal_signature()` for v2 seal management
+- Backward compatibility: v1 artifacts (128 bytes) remain fully supported
+
 #### vwh (Public Inspector)
 
-- VWH v2 format detection with graceful error message
-- Clear upgrade instructions when v2 artifacts are encountered
-- Forward compatibility preparation for v2.0.0 release
+- V2 artifact inspection with dual signature verification
+- Separate display of author key and seal key for v2 artifacts
+- Note file verification: checks for `.vwh.note` presence and BLAKE3 hash match
+- Versioned registry paths: `/v1/` for v1 artifacts, `/v2/` for v2 artifacts
+- Enhanced state display: differentiates v1 sealed vs v2 dual-signed
+- Note integrity warnings when hash is present but file is missing
+- Seal signature verification separate from author signature
 
 ### Changed
 
-- Inspector now detects v2 artifacts (256 bytes) and provides helpful upgrade guidance
-- No functional changes to v1 artifact inspection
+#### vwh-core
+
+- `Artifact` struct now supports both v1 and v2 formats in unified structure
+- `from_bytes()` auto-detects v1 (128 bytes) vs v2 (256 bytes) based on size and version field
+- `is_sealed()` behavior differs: v1 checks FLAGS bit, v2 checks seal_signature presence
+- `author_signing_bytes()` returns different byte counts: v1 (63 bytes) vs v2 (103 bytes)
+- Version field changed from `u16` to `ArtifactVersion` enum for type safety
+
+#### vwh (Public Inspector)
+
+- Registry fetching now uses versioned paths based on artifact version
+- Artifact information display adapts to v1 vs v2 format
+- Cryptographic verification section now handles dual signatures for v2
+
+### Breaking Changes
+
+- **Format size**: V2 artifacts are 256 bytes (v1 was 128 bytes)
+- **Registry paths**: Now versioned as `/v1/` and `/v2/` instead of root-level files
+- **API changes**: `Artifact.version` is now `ArtifactVersion` enum, not raw `u16`
+- **Signature field**: Renamed from `signature` to `author_signature` for clarity
+- **V2 requirements**: Note file (`.vwh.note`) required for proper v2 artifacts
+
+### Migration Guide
+
+#### For V1 Artifacts
+- No changes needed - v1 artifacts (128 bytes) continue to work perfectly
+- Inspector automatically detects and handles v1 format
+- Existing v1 workflows unchanged
+
+#### For Registry Hosts
+- Update registry structure to include version subdirectories:
+  ```
+  /vwh-registry/
+    v1/
+      keys.json
+      ledger.json
+    v2/
+      keys.json
+      ledger.json
+  ```
+
+#### For V2 Adoption
+- Use `ArtifactBuilder::new_v2(intent, pubkey, note_hash)` instead of `new_v1()`
+- Create `.vwh.note` file alongside artifact
+- Compute BLAKE3 hash of note content for note_hash field
+- Use seal signature for finalization instead of FLAGS bit
+- Both author and seal keys needed for full v2 workflow
+
+### Security
+
+- Dual signature model provides ceremony separation: author vs seal authority
+- Note hash binds human-readable context to cryptographic artifact
+- Seal signature covers author signature, preventing signature substitution
+- Note tampering detection through BLAKE3 hash verification
+
+### Technical Details
+
+**V2 Format Layout (256 bytes):**
+```
+MAGIC (4) + VERSION (2) + RESERVED_A (1) + ARTIFACT_ID (16) +
+TIMESTAMP (8) + INTENT (1) + AUTHOR_PUBKEY (32) + NOTE_HASH (32) +
+AUTHOR_SIGNATURE (64) + SEAL_PUBKEY (32) + SEAL_SIGNATURE (64) = 256 bytes
+```
+
+**Signature Coverage:**
+- Author signs: First 103 bytes (through NOTE_HASH)
+- Seal signs: First 192 bytes (through SEAL_PUBKEY, includes AUTHOR_SIGNATURE)
+
+**Philosophy:**
+V2 adds ceremony, clarity, and institutional finality without becoming a container format.
+No payloads, no TLV encoding, no dynamic extensions - deterministic and bounded.
 
 ## [1.0.0] - 2026-02-10
 

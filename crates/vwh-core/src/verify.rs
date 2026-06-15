@@ -3,15 +3,14 @@ use crate::{crypto, format::Artifact, Result};
 /// Verify artifact signature
 pub fn verify_artifact(artifact: &Artifact) -> Result<()> {
     let signing_bytes = artifact.signing_bytes();
-    crypto::verify(&artifact.author_pubkey, &signing_bytes, &artifact.signature)
+    crypto::verify(&artifact.author_pubkey, &signing_bytes, &artifact.author_signature)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::{ArtifactBuilder, VERSION};
+    use crate::format::ArtifactBuilder;
     use crate::{crypto, Intent};
-    use chrono::Utc;
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 

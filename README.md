@@ -103,28 +103,30 @@ Registry data is advisory only. Signature validity is always authoritative and l
 
 ## 🏴‍☠️ The "Frame Me" Challenge
 
-VWH separates **Mathematical Validity** from **Authority**.
+VWH relies on a separation between **Mathematical Validity** (the signature is correct) and **Authority** (the key is trusted).
 
-To demonstrate this, I've published the demo key with its passphrase.
+To prove this, I have published the **Private Key** for the official Demo Identity.
 
-**Your mission:** Use `vwh-core` to create a malicious artifact.
+**I challenge you to frame me.**
+Try to create a VWH artifact that this tool accepts as a legitimate proof of _my_ presence (`vcto`).
 
-**What you have:**
+### The Demo Credentials
 
-- Demo private key: [`examples/demo-key/identity.key.enc`](examples/demo-key/identity.key.enc)
-- Demo public key: [`examples/demo-key/identity.pub`](examples/demo-key/identity.pub)
-- Passphrase: `vwh-demo-mode`
-- Full vwh-core library source code
+- **Encrypted Private Key:** [`examples/demo-key/identity.key.enc`](examples/demo-key/identity.key.enc)
+- **Public Key:** [`examples/demo-key/identity.pub`](examples/demo-key/identity.pub)
+- **Passphrase:** `vwh-demo-mode`
 
-**The result:**
-Your artifact will have a ✅ **cryptographically valid signature**  
-But registry will flag it as ⚠️ **UNTRUSTED/DEMO**
+### How to play:
 
-**This proves:** Even with a compromised key, the registry prevents
-unauthorized attribution.
+1. Use the `vwh-core` library to decrypt the key and sign a malicious artifact.
+2. Run `vwh inspect malicious.vwh`.
 
-**Hint:** Everything you need is in `vwh-core`. Start with
-`ArtifactBuilder` and `signing_bytes()`.
+**The Result:**
+You will see that while the signature is **✅ Valid**, the identity will be flagged as **⚠️ UNTRUSTED / DEMO**.
+
+This proves that even if a key is compromised (or public!), the Registry prevents unauthorized attribution.
+
+**Build and Test**
 
 ```bash
 cargo test --workspace
