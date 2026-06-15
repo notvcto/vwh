@@ -1,146 +1,134 @@
-# VWH (Victor Was Here)
+# VWH — Victor Was Here
 
 [![Crate](https://img.shields.io/crates/v/vwh.svg)](https://crates.io/crates/vwh)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-VWH is a cryptographic artifact format and public inspector for proving that a specific intent was recorded at a point in time. Artifacts are immutable once signed, and verification works offline. A network registry is optional and advisory.
+A cryptographic artifact format for proving that a specific intent was recorded at a specific point in time, by a specific key, not just a specific person. That distinction is the whole point.
 
-This repository contains only public components:
+**Signatures prove key possession. The registry provides attribution context.** Those are two separate claims, and VWH keeps them separate by design.
 
-- `vwh-core` (library): format parsing, hashing, signing, verification
-- `vwh` (CLI): public inspector for `.vwh` artifacts
+---
 
-The private authoring tool used to create and sign artifacts is intentionally not included here.
+## What it is
 
-**Status:** v1 format, stable for public inspection.
+You create an artifact with an intent (a string. A commitment, a decision, a statement). You sign it with your Ed25519 signing key. Optionally, you seal it with a separate sealing key, making it immutable. The artifact is 256 bytes. It verifies offline. The registry is advisory.
 
-**Key Ideas**
+```
+Draft → Signed → Sealed
+```
 
-- **Offline-first**: Signature verification never depends on the network.
-- **Immutable**: Signed artifacts cannot be modified without invalidating the signature.
-- **Advisory registry**: Optional trust context for key status and revocations.
+- **Draft**: intent recorded, key bound, no signature yet
+- **Signed**: author signature covers the artifact + note hash
+- **Sealed**: second signature from a separate sealing key; the artifact is now immutable
 
-**Artifacts**
+V2 artifacts carry a BLAKE3 note hash. The note itself lives in a `.vwh.note` sidecar file. If the hash doesn't match, `vwh inspect` tells you.
 
-- Binary format, fixed size (128 bytes)
-- Signed with Ed25519
-- Includes a public key and intent
+---
 
-**Installation**
+## Install
+
+```bash
+cargo install vwh
+```
+
+Or build from source:
 
 ```bash
 cargo build --release
+# binary at target/release/vwh
 ```
 
-Binaries will be at:
+---
 
-```bash
-target/release/vwh
-```
+## Usage
 
-**Usage**
-
-Binary name by OS:
-
-- macOS/Linux: `vwh`
-- Windows: `vwh.exe`
-
-If running from build output:
-
-- macOS/Linux: `./target/release/vwh`
-- Windows (PowerShell): `.\target\release\vwh.exe`
-
-Inspect a file:
+**Inspect an artifact:**
 
 ```bash
 vwh inspect artifact.vwh
 ```
 
-Offline mode:
+**Read the attached note:**
+
+```bash
+vwh note artifact.vwh
+```
+
+**Offline (skip registry check):**
 
 ```bash
 vwh inspect artifact.vwh --offline
 ```
 
-Custom registry URL:
+**Custom registry:**
 
 ```bash
-vwh inspect artifact.vwh --registry https://example.com/registry
-```
-
-Or via environment variable:
-
-```bash
-export VWH_REGISTRY_URL=https://example.com/registry
+vwh inspect artifact.vwh --registry https://example.com/vwh-registry
+# or
+export VWH_REGISTRY_URL=https://example.com/vwh-registry
 vwh inspect artifact.vwh
 ```
 
-Windows (PowerShell):
+---
 
-```powershell
-$env:VWH_REGISTRY_URL = "https://example.com/registry"
-vwh.exe inspect artifact.vwh
-```
+## What `vwh inspect` checks
 
-Windows (CMD):
+In order:
 
-```cmd
-set VWH_REGISTRY_URL=https://example.com/registry
-vwh.exe inspect artifact.vwh
-```
+1. **Artifact parse** — is this a valid `.vwh` file?
+2. **Note verification** — if V2, does the sidecar hash match?
+3. **Author signature** — Ed25519 over the artifact body
+4. **Seal signature** — if sealed, Ed25519 over the artifact including the seal key
+5. **Registry commit signature** — is the latest commit to the registry GPG-signed? If not, falls back to the last signed commit
+6. **Key status** — is the signing key active, deprecated, or revoked? If deprecated, did the artifact predate the rotation?
+7. **Ledger status** — is this artifact publicly acknowledged, or sealed but absent from the ledger (suspicious)?
 
-**Registry (Optional)**
+A valid signature with an unsigned registry commit gets called out. A valid signature from a demo key gets called out. The output doesn't hide things.
 
-If available, the inspector fetches:
+---
 
-- `keys.json`
-- `ledger.json`
+## Registry
 
-Default registry base URL:
+Default registry: `https://notvc.to/vwh-registry`
 
-- `https://notvc.to/vwh-registry`
+The registry is backed by a public git repo (`github.com/notvcto/vwh-registry`). Before trusting registry data, the inspector checks whether the HEAD commit is GPG-signed. If it isn't (possible tampered push, CI key, or mistake) it walks back through the last 20 commits, finds the most recent signed one, and fetches `keys.json` and `ledger.json` at that SHA instead.
 
-Registry data is advisory only. Signature validity is always authoritative and local.
+Registry data is always advisory. Signature verification is always local and offline-first.
+
+---
 
 ## 🏴‍☠️ The "Frame Me" Challenge
 
-VWH relies on a separation between **Mathematical Validity** (the signatures are correct) and **Authority** (the registry says the key can be trusted for attribution).
+VWH separates two things that look identical from the outside: **a valid signature** and **a trustworthy attribution**.
 
-To prove the separation actually holds, I've published **both private keys** for the official Demo Identity — the author (signing) key *and* the seal (sealing) key. With both, you can produce a fully dual-signed, immutable V2 artifact that passes every cryptographic check `vwh inspect` runs.
+To prove the gap is real, I've published both private keys for the official demo identity; the signing key and the sealing key. With them, you can produce a perfectly dual-signed V2 artifact that passes every cryptographic check `vwh inspect` runs.
 
 **I challenge you to frame me.**
-Try to create a `.vwh` artifact that this tool accepts as a legitimate proof of _my_ presence (`vcto`).
 
-### The Demo Credentials
+### The demo credentials
 
-- **Encrypted Signing Key:** [`examples/demo-key/signing.key.enc`](examples/demo-key/signing.key.enc)
-- **Signing Public Key:** [`examples/demo-key/signing.pub`](examples/demo-key/signing.pub) — `c043ce6b9a8f6d4c44bb4198b92261e1a6062e6d925fe3430f1bcdbcbd07dc1c`
-- **Encrypted Sealing Key:** [`examples/demo-key/sealing.key.enc`](examples/demo-key/sealing.key.enc)
-- **Sealing Public Key:** [`examples/demo-key/sealing.pub`](examples/demo-key/sealing.pub) — `d7e15d78527d085a4061867f933a8be56f0daa9d8e9431f8127a0efcba0d702a`
-- **Passphrase (both keys):** `vwh-demo-mode`
+| | |
+|---|---|
+| Signing key (encrypted) | [`examples/demo-key/signing.key.enc`](examples/demo-key/signing.key.enc) |
+| Signing public key | `c043ce6b9a8f6d4c44bb4198b92261e1a6062e6d925fe3430f1bcdbcbd07dc1c` |
+| Sealing key (encrypted) | [`examples/demo-key/sealing.key.enc`](examples/demo-key/sealing.key.enc) |
+| Sealing public key | `d7e15d78527d085a4061867f933a8be56f0daa9d8e9431f8127a0efcba0d702a` |
+| Passphrase (both keys) | `vwh-demo-mode` |
 
-### Reference Artifact
-
-A real sealed V2 artifact, signed and sealed with these exact keys, is included so you can see what "fully valid" looks like before you try to beat it:
-
-- [`examples/challenge.vwh`](examples/demo-key/challenge.vwh)
-- [`examples/challenge.vwh.note`](examples/demo-key/challenge.vwh.note)
+A real sealed V2 artifact signed with these exact keys is included so you can see what "fully valid" looks like before you try to beat it:
 
 ```bash
-vwh inspect examples/demo-key/challenge.vwh --offline
+vwh inspect examples/demo-key/challenge.vwh
 vwh note examples/demo-key/challenge.vwh
 ```
 
-Both signatures verify. The note hash checks out. Structurally, it's indistinguishable from a real one.
-
 ### How to play
 
-1. Decrypt both keys with the `vwh-core` library using the passphrase above.
-2. Build a malicious `.vwh` draft, sign it with the **signing** key, then seal it with the **sealing** key — the same workflow used to create the reference artifact.
-3. Run `vwh inspect malicious.vwh`.
+1. Decrypt the keys using the `vwh-core` library and the passphrase above
+2. Build a `.vwh` draft, sign it with the signing key, seal it with the sealing key
+3. Run `vwh inspect your-artifact.vwh`
 
-### The Result
-
-Cryptographically, your artifact will be perfect:
+### What you get
 
 ```
 [OK] Author signature valid
@@ -149,12 +137,7 @@ Cryptographically, your artifact will be perfect:
 [OK] DUAL-SIGNED (immutable)
 ```
 
-But the registry knows these keys by fingerprint:
-
-- Signing FP: `d42c5b43d040749c5147b9ead70a1497dcccd1267cb2c47e2eeaf815ae5aac40`
-- Sealing FP: `5ae917a04a1f2d2d0bdb98688ed9d7c703c640278ac29fa4d6057693d4e761c3`
-
-Both are flagged `"is_demo": true` in the registry — independent of `status` (active/deprecated/revoked). The inspector will show:
+And then:
 
 ```
 [WARN] DEMO KEY — do not trust for attribution
@@ -162,9 +145,24 @@ Both are flagged `"is_demo": true` in the registry — independent of `status` (
    Valid signature ≠ Victor's presence.
 ```
 
-Math says the signatures are valid. The registry says don't believe it anyway. That gap *is* the point — a valid signature proves an artifact was signed with a given key, not that I was the one signing it.
+The registry flags these keys `"is_demo": true`. Independently of status. A valid signature from a key I've published to the world proves nothing about who was holding it.
 
-**Build and Test**
+**That gap is the point.** Cryptography proves key possession. Attribution requires a trust model on top of it. VWH makes you look at both separately, not conflate them.
+
+---
+
+## Architecture
+
+```
+vwh-core    — format, parsing, signing, verification (library)
+vwh         — public inspector CLI (this crate)
+```
+
+The private authoring tool (`vwh-author`) is not published. It handles key generation, signing, sealing, key rotation, revocation, and registry publishing.
+
+---
+
+## Build & test
 
 ```bash
 cargo test --workspace
@@ -172,6 +170,8 @@ cargo fmt --check
 cargo clippy --workspace -- -D warnings
 ```
 
-**License**
+---
 
-MIT (see [`LICENSE`](LICENSE)).
+## License
+
+MIT — see [`LICENSE`](LICENSE).
