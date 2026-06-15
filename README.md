@@ -118,8 +118,8 @@ To prove the gap is real, I've published both private keys for the official demo
 A real sealed V2 artifact signed with these exact keys is included so you can see what "fully valid" looks like before you try to beat it:
 
 ```bash
-vwh inspect examples/demo-key/challenge.vwh
-vwh note examples/demo-key/challenge.vwh
+vwh inspect examples/challenge.vwh
+vwh note examples/challenge.vwh
 ```
 
 ### How to play
