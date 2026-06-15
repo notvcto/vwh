@@ -681,8 +681,9 @@ mod tests {
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
 
-        let seal_sig = crypto::sign(&seal_key, &author_signed.seal_signing_bytes());
-        let sealed = author_signed.with_seal(seal_pubkey, seal_sig);
+        let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
 
         let parsed = Artifact::from_bytes(&sealed.to_bytes()).unwrap();
 
@@ -692,6 +693,8 @@ mod tests {
         assert_eq!(parsed.author_signature, sealed.author_signature);
         assert_eq!(parsed.seal_pubkey, seal_pubkey);
         assert_eq!(parsed.seal_signature, sealed.seal_signature);
+        // Verify seal signature actually validates (not just stored correctly)
+        assert!(crypto::verify(&seal_pubkey, &parsed.seal_signing_bytes(), &parsed.seal_signature).is_ok());
     }
 
     // --- State machine ---
@@ -730,8 +733,9 @@ mod tests {
         let unsigned = ArtifactBuilder::new_v2(Intent::Lab, author_pubkey, ZERO_HASH).build_unsigned();
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
-        let seal_sig = crypto::sign(&seal_key, &author_signed.seal_signing_bytes());
-        let sealed = author_signed.with_seal(seal_pubkey, seal_sig);
+        let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
 
         assert_eq!(sealed.state(), ArtifactState::Sealed);
         assert!(sealed.has_author_signature());
@@ -765,8 +769,9 @@ mod tests {
         let unsigned = ArtifactBuilder::new_v2(Intent::Lab, author_pubkey, ZERO_HASH).build_unsigned();
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
-        let seal_sig = crypto::sign(&seal_key, &author_signed.seal_signing_bytes());
-        let mut sealed = author_signed.with_seal(seal_pubkey, seal_sig);
+        let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let mut sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
         sealed.author_signature = [0xffu8; 64]; // tamper
 
         let verify_bytes = sealed.seal_signing_bytes();
@@ -807,8 +812,9 @@ mod tests {
         let unsigned = ArtifactBuilder::new_v2(Intent::Lab, author_pubkey, ZERO_HASH).build_unsigned();
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
-        let seal_sig = crypto::sign(&seal_key, &author_signed.seal_signing_bytes());
-        let sealed = author_signed.with_seal(seal_pubkey, seal_sig);
+        let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
         let unsealed = sealed.without_seal_signature();
 
         assert_eq!(unsealed.seal_signature, ZERO_SIGNATURE);

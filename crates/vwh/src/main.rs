@@ -27,14 +27,19 @@ enum Commands {
     Inspect {
         /// Path to .vwh file
         file: PathBuf,
-        
+
         /// Skip registry check (offline mode)
         #[arg(long)]
         offline: bool,
-        
+
         /// Custom registry base URL
         #[arg(long, env = "VWH_REGISTRY_URL")]
         registry: Option<String>,
+    },
+    /// Display the note attached to a V2 artifact
+    Note {
+        /// Path to .vwh artifact file
+        file: PathBuf,
     },
 }
 
@@ -57,6 +62,8 @@ struct KeyEntry {
     label: Option<String>,
     deprecated_at: Option<String>,  // RFC3339, stamped on rotation
     revoked_at: Option<String>,     // RFC3339, stamped on revocation
+    #[serde(default)]
+    is_demo: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,7 +249,8 @@ fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result
                         if computed_hash.as_bytes() == &artifact.note_hash {
                             println!("  [OK] Note file found: {}", note_path.display());
                             println!("  [OK] Note hash verified (BLAKE3)");
-                            println!("  [OK] Note integrity confirmed\n");
+                            println!("  [OK] Note integrity confirmed");
+                            println!("  [INFO] Run 'vwh note {}' to view note content.\n", file.display());
                         } else {
                             println!("  [ERR] Note file found but hash MISMATCH");
                             println!("       Expected: {}", hex::encode(artifact.note_hash));
@@ -411,6 +419,12 @@ fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result
                                 println!("  [WARN] Signing key has unknown status: {}\n", key.status);
                             }
                         }
+
+                        if key.is_demo {
+                            println!("  [WARN] DEMO KEY — do not trust for attribution");
+                            println!("     This key is intentionally public (Frame Me challenge).");
+                            println!("     Valid signature ≠ Victor's presence.\n");
+                        }
                     }
                     None => {
                         println!("  [INFO] Signing key not in registry");
@@ -488,11 +502,66 @@ fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result
     Ok(())
 }
 
+fn note(file: &PathBuf) -> Result<()> {
+    let bytes = fs::read(file).context("Failed to read artifact file")?;
+    let artifact = Artifact::from_bytes(&bytes).context("Failed to parse artifact")?;
+
+    if artifact.version != vwh_core::format::ArtifactVersion::V2 {
+        anyhow::bail!("Notes are only supported for V2 artifacts (this is a V1 artifact)");
+    }
+
+    if !artifact.has_note_hash() {
+        anyhow::bail!("This artifact has no note attached (note_hash is zero)");
+    }
+
+    let note_path = file.with_extension("vwh.note");
+
+    if !note_path.exists() {
+        anyhow::bail!(
+            "Note sidecar file not found: {}\nNote hash is present in artifact but file is missing.",
+            note_path.display()
+        );
+    }
+
+    let note_bytes = fs::read(&note_path).context("Failed to read note file")?;
+    let computed_hash = blake3::hash(&note_bytes);
+    let hash_ok = computed_hash.as_bytes() == &artifact.note_hash;
+
+    let note_text = String::from_utf8_lossy(&note_bytes);
+
+    println!();
+    print_sep();
+    if hash_ok {
+        println!("Note (BLAKE3 verified):\n");
+    } else {
+        println!("Note [WARN: hash mismatch — content may be tampered]:\n");
+    }
+    println!("---");
+    println!("{}", note_text.trim());
+    println!("---\n");
+
+    if !hash_ok {
+        println!("[ERR] Expected: {}", hex::encode(artifact.note_hash));
+        println!("[ERR] Got:      {}", hex::encode(computed_hash.as_bytes()));
+        println!();
+    }
+
+    print_sep();
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Inspect { file, offline, registry } => inspect(file, offline, registry),
+        Commands::Note { file } => {
+            if let Err(e) = note(&file) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
 }
 
