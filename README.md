@@ -122,8 +122,8 @@ Try to create a `.vwh` artifact that this tool accepts as a legitimate proof of 
 
 A real sealed V2 artifact, signed and sealed with these exact keys, is included so you can see what "fully valid" looks like before you try to beat it:
 
-- [`examples/demo-key/challenge.vwh`](examples/demo-key/challenge.vwh)
-- [`examples/demo-key/challenge.vwh.note`](examples/demo-key/challenge.vwh.note)
+- [`examples/challenge.vwh`](examples/demo-key/challenge.vwh)
+- [`examples/challenge.vwh.note`](examples/demo-key/challenge.vwh.note)
 
 ```bash
 vwh inspect examples/demo-key/challenge.vwh --offline
