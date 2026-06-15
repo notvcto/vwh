@@ -7,6 +7,8 @@ use vwh_core::{format::Artifact, verify::verify_artifact};
 
 const DEFAULT_REGISTRY_URL: &str = "https://notvc.to/vwh-registry";
 const SECTION_SEP: &str = "-----------------------------------------";
+const REGISTRY_GITHUB_REPO: &str = "notvcto/vwh-registry";
+const GITHUB_API_BASE: &str = "https://api.github.com";
 
 fn print_sep() {
     println!("{}\n", SECTION_SEP);
@@ -91,6 +93,29 @@ enum RegistryStatus {
     Unavailable(String),
 }
 
+#[derive(Deserialize)]
+struct GithubCommit {
+    sha: String,
+    commit: GithubCommitInner,
+}
+
+#[derive(Deserialize)]
+struct GithubCommitInner {
+    verification: GithubVerification,
+}
+
+#[derive(Deserialize)]
+struct GithubVerification {
+    verified: bool,
+    reason: String,
+}
+
+enum CommitCheck {
+    Signed { sha: String },
+    Unsigned { reason: String, sha: String, fallback_sha: Option<String> },
+    Unavailable(String),
+}
+
 fn fetch_registry(base_url: &str, offline: bool, artifact_version: u16) -> RegistryStatus {
     if offline {
         return RegistryStatus::Unavailable("Offline mode".to_string());
@@ -141,6 +166,84 @@ fn fetch_registry(base_url: &str, offline: bool, artifact_version: u16) -> Regis
     };
     
     RegistryStatus::Available { keys, ledger }
+}
+
+fn check_commit_signature() -> CommitCheck {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("vwh-inspector/2.0")
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return CommitCheck::Unavailable(format!("HTTP client error: {}", e)),
+    };
+
+    let url = format!("{}/repos/{}/commits/HEAD", GITHUB_API_BASE, REGISTRY_GITHUB_REPO);
+    let head: GithubCommit = match client.get(&url).send() {
+        Ok(r) if r.status().is_success() => match r.json() {
+            Ok(c) => c,
+            Err(e) => return CommitCheck::Unavailable(format!("GitHub API parse error: {}", e)),
+        },
+        Ok(r) => return CommitCheck::Unavailable(format!("GitHub API HTTP {}", r.status())),
+        Err(e) => return CommitCheck::Unavailable(format!("GitHub API unreachable: {}", e)),
+    };
+
+    if head.commit.verification.verified {
+        return CommitCheck::Signed { sha: head.sha };
+    }
+
+    let list_url = format!("{}/repos/{}/commits?per_page=20", GITHUB_API_BASE, REGISTRY_GITHUB_REPO);
+    let commits: Vec<GithubCommit> = client
+        .get(&list_url)
+        .send()
+        .ok()
+        .and_then(|r| r.json().ok())
+        .unwrap_or_default();
+
+    let fallback_sha = commits.iter()
+        .find(|c| c.commit.verification.verified)
+        .map(|c| c.sha.clone());
+
+    CommitCheck::Unsigned {
+        reason: head.commit.verification.reason,
+        sha: head.sha,
+        fallback_sha,
+    }
+}
+
+fn fetch_at_commit(sha: &str, artifact_version: u16) -> Option<(KeysRegistry, LedgerRegistry)> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent("vwh-inspector/2.0")
+        .build()
+        .ok()?;
+
+    let base = format!(
+        "{}/repos/{}/contents/v{}",
+        GITHUB_API_BASE, REGISTRY_GITHUB_REPO, artifact_version
+    );
+
+    let keys_bytes = client
+        .get(format!("{}/keys.json?ref={}", base, sha))
+        .header("Accept", "application/vnd.github.raw")
+        .send()
+        .ok()?
+        .bytes()
+        .ok()?;
+
+    let ledger_bytes = client
+        .get(format!("{}/ledger.json?ref={}", base, sha))
+        .header("Accept", "application/vnd.github.raw")
+        .send()
+        .ok()?
+        .bytes()
+        .ok()?;
+
+    let keys = serde_json::from_slice::<KeysRegistry>(&keys_bytes).ok()?;
+    let ledger = serde_json::from_slice::<LedgerRegistry>(&ledger_bytes).ok()?;
+
+    Some((keys, ledger))
 }
 
 fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result<()> {
@@ -345,10 +448,41 @@ fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result
     let registry = fetch_registry(base_url, offline, artifact_version);
     
     match registry {
-        RegistryStatus::Available { keys, ledger } => {
+        RegistryStatus::Available { mut keys, mut ledger } => {
             println!("  [OK] Registry available");
             println!("  [OK] Last updated: {}\n", ledger.updated_at);
-            
+
+            // Commit signature check (default registry only)
+            if registry_url.is_none() {
+                match check_commit_signature() {
+                    CommitCheck::Signed { sha } => {
+                        println!("  [OK] Registry commit signed ({})\n", &sha[..8]);
+                    }
+                    CommitCheck::Unsigned { reason, sha, fallback_sha } => {
+                        println!("  [ERR] REGISTRY COMMIT UNSIGNED — possible registry forgery");
+                        println!("        HEAD {} not GPG-signed (reason: {})\n", &sha[..8], reason);
+                        if let Some(ref fb_sha) = fallback_sha {
+                            println!("  [WARN] Falling back to last signed commit: {}", &fb_sha[..8]);
+                            match fetch_at_commit(fb_sha, artifact_version) {
+                                Some((fb_keys, fb_ledger)) => {
+                                    println!("  [WARN] Using registry data from {}\n", &fb_sha[..8]);
+                                    keys = fb_keys;
+                                    ledger = fb_ledger;
+                                }
+                                None => {
+                                    println!("  [ERR] Could not fetch fallback — registry data untrusted\n");
+                                }
+                            }
+                        } else {
+                            println!("  [ERR] No signed commits found in last 20 — registry untrusted\n");
+                        }
+                    }
+                    CommitCheck::Unavailable(reason) => {
+                        println!("  [WARN] Could not verify registry commit signature: {}\n", reason);
+                    }
+                }
+            }
+
             // Check key status
             if artifact.has_author_pubkey() {
                 let fingerprint_hex = artifact.author_fingerprint().to_hex();
