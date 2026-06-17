@@ -25,6 +25,12 @@ pub enum Error {
     #[error("Signature verification failed")]
     SignatureInvalid,
 
+    #[error("Artifact has no seal")]
+    NoSeal,
+
+    #[error("Key bytes are malformed or invalid")]
+    KeyMalformed,
+
     #[error("File too small (minimum {expected} bytes, got {actual})")]
     FileTooSmall { expected: usize, actual: usize },
 
@@ -36,5 +42,8 @@ pub enum Error {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Invalid artifact state: expected {expected}, got {actual}")]
+    InvalidState { expected: &'static str, actual: &'static str },
 }
 

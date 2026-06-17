@@ -6,6 +6,60 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — Versioning:
 
 ---
 
+## [3.0.0] - 2026-06-17
+
+### Breaking
+
+#### vwh-core
+
+- **Domain-separated signing** (ARCH-5): `crypto::sign` and `crypto::verify` now prepend
+  `b"vwh-v2\x00"` (7 bytes) to the message before Ed25519 operations. The on-disk artifact
+  format is unchanged, but signatures produced by releases ≤2.0.2 will fail verification
+  under 3.0.0 and vice versa.
+- `seal_signing_bytes()` now returns `Result<Vec<u8>>`; returns `Err(NoSeal)` for artifacts
+  with no seal instead of silently producing bytes over a zero pubkey.
+
+### Added
+
+#### vwh-core
+
+- `verify_seal(artifact)` — dedicated function for seal signature verification
+- `TypedArtifact<S>` phantom-type wrapper with `Draft`, `Signed`, `Sealed` marker types —
+  encodes artifact lifecycle state in the type system; zero runtime cost
+- `Error::KeyMalformed`, `Error::NoSeal`, `Error::InvalidState` variants
+
+#### vwh (Public Inspector)
+
+- **Sealing key registry check**: seal key fingerprint now looked up in `keys.json`; status
+  (active / deprecated / revoked), label, `is_demo` flag, and time-gating all apply — same
+  as signing key
+- `LedgerEntry.created_at`: artifact creation timestamp stored in ledger on seal
+- Exit code contract: 0 = verified, 1 = fatal error, 2 = crypto failure,
+  3 = registry unavailable (crypto still passed)
+
+### Fixed
+
+#### vwh-core
+
+- `is_sealed()` delegates to `state()` — eliminates the prior disagreement between the
+  direct field-check path and the state machine
+- `KeyFingerprint::Display` now outputs full 64-char hex; use `short_display()` for the
+  short form explicitly
+- Removed dead `RevocationReason` enum (zero usages)
+
+#### vwh (Public Inspector)
+
+- All diagnostic output uses `stderr`; `stdout` reserved for verified artifact data
+- Single `reqwest::blocking::Client` with `redirect::Policy::none()` reused across all
+  registry fetches (was rebuilt per call)
+- `exit(3)` when registry is unavailable but crypto verification passed (was falling through)
+- Revoked key check now fires and exits before status display block
+
+### Other
+
+- Demo artifact (`examples/challenge.vwh`) re-signed and re-sealed under v3.0.0
+  domain-separated signatures
+
 ## [2.0.2] - 2026-06-15
 
 ### Added

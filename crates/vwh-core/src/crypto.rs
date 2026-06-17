@@ -3,7 +3,10 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 /// Sign bytes with Ed25519 signing key
 pub fn sign(signing_key: &SigningKey, message: &[u8]) -> [u8; 64] {
-    let signature = signing_key.sign(message);
+    let mut ctx = Vec::with_capacity(8 + message.len());
+    ctx.extend_from_slice(b"vwh-v2\x00");
+    ctx.extend_from_slice(message);
+    let signature = signing_key.sign(&ctx);
     signature.to_bytes()
 }
 
@@ -14,12 +17,16 @@ pub fn verify(
     signature: &[u8; 64],
 ) -> Result<()> {
     let verifying_key = VerifyingKey::from_bytes(public_key)
-        .map_err(|_| Error::SignatureInvalid)?;
-    
+        .map_err(|_| Error::KeyMalformed)?;
+
     let sig = Signature::from_bytes(signature);
-    
+
+    let mut ctx = Vec::with_capacity(8 + message.len());
+    ctx.extend_from_slice(b"vwh-v2\x00");
+    ctx.extend_from_slice(message);
+
     verifying_key
-        .verify(message, &sig)
+        .verify(&ctx, &sig)
         .map_err(|_| Error::SignatureInvalid)
 }
 

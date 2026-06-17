@@ -283,10 +283,14 @@ impl Artifact {
         }
     }
     
-    /// Get bytes that were signed by seal (V2 only)
-    pub fn seal_signing_bytes(&self) -> Vec<u8> {
-        assert_eq!(self.version, ArtifactVersion::V2, "seal_signing_bytes only valid for v2");
-        
+    /// Get bytes that were signed by seal (V2 only).
+    /// Returns Err if the artifact has no seal (seal_pubkey is all zeros).
+    pub fn seal_signing_bytes(&self) -> Result<Vec<u8>> {
+        // All-zeros pubkey means no seal has been applied
+        if self.seal_pubkey == [0u8; 32] {
+            return Err(Error::NoSeal);
+        }
+
         // 192 bytes: everything except seal_signature
         let mut bytes = Vec::with_capacity(192);
         bytes.extend_from_slice(MAGIC);  // 4
@@ -299,12 +303,7 @@ impl Artifact {
         bytes.extend_from_slice(&self.note_hash);  // 32
         bytes.extend_from_slice(&self.author_signature);  // 64
         bytes.extend_from_slice(&self.seal_pubkey);  // 32
-        bytes
-    }
-
-    /// Get bytes for signing (legacy compatibility)
-    pub fn signing_bytes(&self) -> Vec<u8> {
-        self.author_signing_bytes()
+        Ok(bytes)
     }
 
     /// Serialize artifact to bytes
@@ -376,12 +375,8 @@ impl Artifact {
     }
     
     /// Check if artifact is sealed
-    /// V1: FLAGS bit set | V2: Seal signature present
     pub fn is_sealed(&self) -> bool {
-        match self.version {
-            ArtifactVersion::V1 => (self.flags & FLAG_SEALED) != 0,
-            ArtifactVersion::V2 => self.seal_signature != ZERO_SIGNATURE,
-        }
+        self.state() == ArtifactState::Sealed
     }
     
     /// Check if artifact has author signature
@@ -408,10 +403,18 @@ impl Artifact {
     pub fn state(&self) -> ArtifactState {
         if !self.has_author_signature() {
             ArtifactState::Draft
-        } else if self.is_sealed() {
+        } else if self.is_sealed_raw() {
             ArtifactState::Sealed
         } else {
             ArtifactState::Signed
+        }
+    }
+
+    /// Internal raw sealed check (used by state() to avoid circular call with is_sealed())
+    fn is_sealed_raw(&self) -> bool {
+        match self.version {
+            ArtifactVersion::V1 => (self.flags & FLAG_SEALED) != 0,
+            ArtifactVersion::V2 => self.seal_signature != ZERO_SIGNATURE,
         }
     }
     
@@ -458,6 +461,93 @@ impl Artifact {
             self.seal_signature = seal_signature;
         }
         self
+    }
+}
+
+// --- Type-level artifact state machine ---
+
+/// Phantom state type: no author signature present
+pub struct Draft;
+/// Phantom state type: author-signed but not sealed
+pub struct Signed;
+/// Phantom state type: dual-signed (author + seal)
+pub struct Sealed;
+
+/// Zero-cost wrapper that encodes artifact lifecycle state in the type system.
+pub struct TypedArtifact<S> {
+    pub inner: Artifact,
+    _state: std::marker::PhantomData<S>,
+}
+
+fn state_name(s: ArtifactState) -> &'static str {
+    match s {
+        ArtifactState::Draft => "Draft",
+        ArtifactState::Signed => "Signed",
+        ArtifactState::Sealed => "Sealed",
+    }
+}
+
+impl TypedArtifact<Draft> {
+    pub fn new(artifact: Artifact) -> Result<Self> {
+        if artifact.state() != ArtifactState::Draft {
+            return Err(Error::InvalidState {
+                expected: "Draft",
+                actual: state_name(artifact.state()),
+            });
+        }
+        Ok(Self { inner: artifact, _state: std::marker::PhantomData })
+    }
+
+    /// Transition Draft → Signed. Consumes self; caller supplies the post-sign artifact.
+    pub fn into_signed(self, artifact: Artifact) -> Result<TypedArtifact<Signed>> {
+        if artifact.state() != ArtifactState::Signed {
+            return Err(Error::InvalidState {
+                expected: "Signed",
+                actual: state_name(artifact.state()),
+            });
+        }
+        Ok(TypedArtifact { inner: artifact, _state: std::marker::PhantomData })
+    }
+}
+
+impl TypedArtifact<Signed> {
+    pub fn new(artifact: Artifact) -> Result<Self> {
+        if artifact.state() != ArtifactState::Signed {
+            return Err(Error::InvalidState {
+                expected: "Signed",
+                actual: state_name(artifact.state()),
+            });
+        }
+        Ok(Self { inner: artifact, _state: std::marker::PhantomData })
+    }
+
+    /// Transition Signed → Sealed. Consumes self; caller supplies the post-seal artifact.
+    pub fn into_sealed(self, artifact: Artifact) -> Result<TypedArtifact<Sealed>> {
+        if artifact.state() != ArtifactState::Sealed {
+            return Err(Error::InvalidState {
+                expected: "Sealed",
+                actual: state_name(artifact.state()),
+            });
+        }
+        Ok(TypedArtifact { inner: artifact, _state: std::marker::PhantomData })
+    }
+}
+
+impl TypedArtifact<Sealed> {
+    pub fn new(artifact: Artifact) -> Result<Self> {
+        if artifact.state() != ArtifactState::Sealed {
+            return Err(Error::InvalidState {
+                expected: "Sealed",
+                actual: state_name(artifact.state()),
+            });
+        }
+        Ok(Self { inner: artifact, _state: std::marker::PhantomData })
+    }
+}
+
+impl<S> TypedArtifact<S> {
+    pub fn artifact(&self) -> &Artifact {
+        &self.inner
     }
 }
 
@@ -581,11 +671,6 @@ impl UnsignedArtifact {
         }
     }
     
-    /// Get bytes to sign (legacy compatibility)
-    pub fn signing_bytes(&self) -> Vec<u8> {
-        self.author_signing_bytes()
-    }
-
     /// Attach author signature and create complete artifact
     pub fn with_author_signature(self, signature: [u8; 64]) -> Artifact {
         Artifact {
@@ -682,7 +767,7 @@ mod tests {
         let author_signed = unsigned.with_signature(author_sig);
 
         let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
-        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes().unwrap());
         let sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
 
         let parsed = Artifact::from_bytes(&sealed.to_bytes()).unwrap();
@@ -694,7 +779,7 @@ mod tests {
         assert_eq!(parsed.seal_pubkey, seal_pubkey);
         assert_eq!(parsed.seal_signature, sealed.seal_signature);
         // Verify seal signature actually validates (not just stored correctly)
-        assert!(crypto::verify(&seal_pubkey, &parsed.seal_signing_bytes(), &parsed.seal_signature).is_ok());
+        assert!(crypto::verify(&seal_pubkey, &parsed.seal_signing_bytes().unwrap(), &parsed.seal_signature).is_ok());
     }
 
     // --- State machine ---
@@ -734,7 +819,7 @@ mod tests {
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
         let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
-        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes().unwrap());
         let sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
 
         assert_eq!(sealed.state(), ArtifactState::Sealed);
@@ -770,11 +855,11 @@ mod tests {
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
         let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
-        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes().unwrap());
         let mut sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
         sealed.author_signature = [0xffu8; 64]; // tamper
 
-        let verify_bytes = sealed.seal_signing_bytes();
+        let verify_bytes = sealed.seal_signing_bytes().unwrap();
         assert!(crypto::verify(&seal_pubkey, &verify_bytes, &sealed.seal_signature).is_err());
     }
 
@@ -813,7 +898,7 @@ mod tests {
         let author_sig = crypto::sign(&author_key, &unsigned.author_signing_bytes());
         let author_signed = unsigned.with_signature(author_sig);
         let pre_seal = author_signed.with_seal(seal_pubkey, [0u8; 64]);
-        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes());
+        let seal_sig = crypto::sign(&seal_key, &pre_seal.seal_signing_bytes().unwrap());
         let sealed = pre_seal.with_seal(seal_pubkey, seal_sig);
         let unsealed = sealed.without_seal_signature();
 

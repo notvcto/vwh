@@ -5,6 +5,7 @@ pub mod verify;
 
 pub use error::{Error, Result};
 pub use format::{Artifact, ArtifactState, FLAG_SEALED, MAGIC};
+pub use format::{Draft, Signed, Sealed, TypedArtifact};
 
 // ArtifactId, Intent, KeyFingerprint are defined in this module and exported below
 
@@ -145,18 +146,8 @@ impl KeyFingerprint {
 
 impl fmt::Display for KeyFingerprint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.short_display())
+        write!(f, "{}", self.to_hex())
     }
 }
 
-/// Revocation reason
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub enum RevocationReason {
-    Error,
-    Compromised,
-    Superseded,
-    AccessRevoked,
-    Other,
-}
 

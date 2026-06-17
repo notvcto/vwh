@@ -2,8 +2,20 @@ use crate::{crypto, format::Artifact, Result};
 
 /// Verify artifact signature
 pub fn verify_artifact(artifact: &Artifact) -> Result<()> {
-    let signing_bytes = artifact.signing_bytes();
+    let signing_bytes = artifact.author_signing_bytes();
     crypto::verify(&artifact.author_pubkey, &signing_bytes, &artifact.author_signature)
+}
+
+/// Verify seal signature on V2 artifacts.
+/// Returns Err if the artifact has no seal (seal pubkey is all zeros)
+/// or if the seal signature doesn't verify.
+pub fn verify_seal(artifact: &Artifact) -> Result<()> {
+    let seal_bytes = artifact.seal_signing_bytes()?;
+    crypto::verify(
+        &artifact.seal_pubkey,
+        &seal_bytes,
+        &artifact.seal_signature,
+    )
 }
 
 #[cfg(test)]
@@ -21,7 +33,7 @@ mod tests {
 
         let builder = ArtifactBuilder::new(Intent::Lab, public_key);
         let unsigned = builder.build_unsigned();
-        let signing_bytes = unsigned.signing_bytes();
+        let signing_bytes = unsigned.author_signing_bytes();
         let signature = crypto::sign(&signing_key, &signing_bytes);
         let artifact = unsigned.with_signature(signature);
 
