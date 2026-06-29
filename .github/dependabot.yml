@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Rust dependencies — covers the workspace and both member crates
+  # (vwh-core, vwh) from the root Cargo.toml / Cargo.lock.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:24"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Roll routine minor/patch bumps into one PR; majors stay separate
+      # so breaking changes get individual review.
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Keep the release workflow's actions current (checkout, rust-toolchain,
+  # action-gh-release, cross).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:24"
+      timezone: "Etc/UTC"
+    commit-message:
+      prefix: "ci"
