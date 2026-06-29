@@ -36,7 +36,7 @@ anyhow = "1.0"
 
 # Utilities
 hex = "0.4"
-directories = "5.0"
+directories = "6.0"
 fd-lock = "4.0"
 
 # HTTP (inspector)
