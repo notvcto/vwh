@@ -1,6 +1,6 @@
 [package]
 name = "vwh"
-version = "4.0.1"
+version = "4.0.2"
 authors = ["Victor Enrique Soto <contact@notvc.to>"]
 edition = "2021"
 description = "Cryptographic accountability tool for creating, signing, sealing, and verifying digital presence."
@@ -16,7 +16,7 @@ name = "vwh"
 path = "src/main.rs"
 
 [dependencies]
-vwh-core = { version = "4.0.1", path = "../vwh-core" }
+vwh-core = { version = "4.0.2", path = "../vwh-core" }
 
 # Serialization
 serde.workspace = true
@@ -52,4 +52,3 @@ rpassword = "7.3"
 # Interactive UX (authoring)
 dialoguer.workspace = true
 console.workspace = true
-indicatif.workspace = true

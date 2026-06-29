@@ -6,6 +6,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — Versioning:
 
 ---
 
+## [4.0.2] - 2026-06-29
+
+### Changed
+
+- **Dropped the unused `indicatif` dependency** from the `vwh` crate. It was
+  declared and pulled into the build but never imported or used anywhere in the
+  source — removing it slims the dependency tree and shaves a crate off every
+  `cargo install vwh`. No behavior, API, or on-disk format change.
+
+> `vwh-core` has **no code changes** this release; its version is bumped to
+> 4.0.2 only to keep the two published crates aligned on a single VWH version.
+
+---
+
 ## [4.0.1] - 2026-06-29
 
 ### Changed
