@@ -43,6 +43,6 @@ fd-lock = "4.0"
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # Interactive UX (authoring)
-dialoguer = "0.11"
+dialoguer = "0.12"
 console = "0.15"
 indicatif = "0.17"
