@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.0.0"
+version = "4.0.0"
 edition = "2021"
 authors = ["Victor"]
 license = "MIT"
@@ -37,6 +37,12 @@ anyhow = "1.0"
 # Utilities
 hex = "0.4"
 directories = "5.0"
+fd-lock = "4.0"
 
-# HTTP (public inspector only)
+# HTTP (inspector)
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+# Interactive UX (authoring)
+dialoguer = "0.11"
+console = "0.15"
+indicatif = "0.17"

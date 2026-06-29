@@ -1,193 +1,188 @@
-.TH VWH 1 "2026-02-09" "VWH v1.0" "User Commands"
+.TH VWH 1 "2026-06-29" "VWH 4.0" "User Commands"
 .SH NAME
-vwh \- Victor Was Here artifact inspector
+vwh \- create, sign, seal, and verify Victor Was Here artifacts
 .SH SYNOPSIS
-.B vwh inspect
-.I FILE
-.RB [ \-\-offline ]
-.RB [ \-\-registry
-.IR URL ]
+.B vwh
+.I COMMAND
+.RI [ ARGS ]
 .SH DESCRIPTION
 .B vwh
-is the public inspector for VWH (Victor Was Here) artifacts. It verifies cryptographic signatures and checks optional trust registry status.
-.PP
-VWH provides cryptographic proof of work authorization through Ed25519 signatures and immutable .vwh artifact files. The inspector performs local signature verification and optionally consults a network registry for trust status.
-.SH COMMANDS
-.TP
-.B inspect
-.I FILE
-Inspect and verify a .vwh artifact file. This command:
-.RS
+is a single command-line tool for the VWH (Victor Was Here) artifact system. It
+serves two roles from one binary:
 .IP \(bu 2
-Parses the binary artifact format
+.B Inspecting
+\(en verifying artifacts. Requires no keys.
 .IP \(bu
-Verifies Ed25519 signature cryptographically
-.IP \(bu
-Checks SEAL flag consistency
-.IP \(bu
-Optionally queries network registry for trust status
-.IP \(bu
-Displays complete artifact information
-.RE
+.B Authoring
+\(en creating, signing, sealing, and publishing artifacts. Requires a keystore
+under
+.IR ~/.vwh .
+.PP
+Cryptographic verification (Ed25519 signatures and BLAKE3 note hashing) is always
+local and offline-capable. A network registry is optional and advisory.
+.PP
+Prior to 4.0, authoring lived in a separate, unpublished
+.B vwh-author
+binary; the two are now unified.
+.SH COMMANDS
+.SS Inspecting
+.TP
+.B inspect \fIFILE\fR \fR[\fB\-\-offline\fR] [\fB\-\-registry \fIURL\fR]
+Parse and verify a .vwh artifact: author signature, seal signature (if sealed),
+note hash, and (unless offline) registry/key/ledger status.
+.TP
+.B note \fIFILE\fR
+Display the artifact's attached note after verifying its BLAKE3 hash. Any header
+block (e.g.
+.IR registry: )
+is parsed out; only the body is shown.
+.SS Authoring
+.TP
+.B key init \fR[\fINAME\fR] [\fB\-\-type \fIsigning|sealing\fR] [\fB\-\-label \fILABEL\fR]
+Generate a new Ed25519 identity. The private key is encrypted (Argon2id +
+ChaCha20-Poly1305) and stored under
+.IR ~/.vwh/keys/ .
+.TP
+.B key show \fR[\fINAME\fR]
+Display a key's public key and fingerprint.
+.TP
+.B key rotate
+Generate a new key and mark the current one deprecated.
+.TP
+.B create \fR[\fB\-\-intent \fIINTENT\fR] [\fB\-\-output \fIFILE\fR] [\fB\-\-v1\fR]
+Create an unsigned draft. V2 (default) also writes a
+.IB FILE .note
+sidecar carrying a
+.I registry:
+header plus your note body.
+.TP
+.B sign \fIFILE\fR \fR[\fB\-\-key \fINAME\fR]
+Author-sign a draft with a signing key.
+.TP
+.B seal \fIFILE\fR \fR[\fB\-\-key \fINAME\fR]
+Dual-sign a signed artifact with a sealing key, making it immutable.
+.TP
+.B unseal \fIFILE\fR
+Remove a V2 seal, returning the artifact to the Signed state.
+.TP
+.B unsign \fIFILE\fR
+Strip the author signature, returning the artifact to a keyless Draft.
+.TP
+.B edit \fIFILE\fR \fR[\fB\-\-intent \fIINTENT\fR]
+Edit draft metadata.
+.TP
+.B revoke key \fB\-\-reason \fIREASON\fR
+Revoke a signing or sealing key in the local registry.
+.TP
+.B revoke artifact \fIID\fB \-\-reason \fIREASON\fR
+Revoke an artifact in the ledger.
+.TP
+.B dump \fIkeys|ledger\fR
+Print local registry state as JSON.
+.TP
+.B push
+Publish the local registry to the remote git repository (GPG-signed commit).
+.SS Planned (4.x)
+.B init\fR,
+.B config\fR,
+.B rebase\fR,
+.B export\fR,
+.B restore
+are present in the CLI and currently report "not yet implemented."
 .SH OPTIONS
 .TP
 .B \-\-offline
-Skip network registry check. Performs only local cryptographic verification. Useful for offline environments or when registry is unavailable.
+(\fBinspect\fR) Skip the network registry check; perform only local
+cryptographic verification.
 .TP
 .BR \-\-registry " " \fIURL\fR
-Use custom registry base URL instead of default. The registry must provide:
-.RS
-.IP \(bu 2
-\fIURL\fR/keys.json
-.IP \(bu
-\fIURL\fR/ledger.json
-.RE
+(\fBinspect\fR) Override the registry base URL. Takes precedence over the
+registry declared in the artifact's note and over the built-in default. The
+registry must provide \fIURL\fR/v2/keys.json and \fIURL\fR/v2/ledger.json.
 .SH ENVIRONMENT
 .TP
 .B VWH_REGISTRY_URL
-Default registry base URL if not specified with --registry flag. Default value is https://notvc.to/vwh-registry
+On
+.BR inspect ,
+an override equivalent to
+.BR \-\-registry .
+On
+.BR create ,
+the value stamped into the new artifact's
+.I registry:
+note header. Default: https://notvc.to/vwh-registry
+.SH FILES
+.TP
+.I ~/.vwh/keys/<name>/
+Per-key directory: identity.key.enc, identity.pub, metadata.json
+.TP
+.I ~/.vwh/keys.json
+Local key registry
+.TP
+.I ~/.vwh/ledger.json
+Local artifact ledger
+.TP
+.I ~/.vwh/registry/
+Git clone of the published registry
+.PP
+On first run, an existing
+.I ~/.config/vwh-author
+keystore is copied into
+.I ~/.vwh
+(non-destructive).
 .SH ARTIFACT STATES
-Artifacts have three possible states:
 .TP
 .B DRAFT
-Unsigned artifact. Cannot be verified. Must be signed before distribution.
+Intent recorded, no author signature yet.
 .TP
 .B SIGNED
-Signed but not sealed. Signature is valid. Can still be unsealed by author.
+Author signature present, not sealed. Can be unsealed/unsigned by the author.
 .TP
 .B SEALED
-Signed and sealed. Immutable forever. Cannot be unsealed or modified.
-.SH VERIFICATION FLOW
-The inspector follows this verification flow:
-.IP 1. 3
-Parse binary format and extract fields
-.IP 2.
-Check SEAL flag consistency (sealed artifacts must be signed)
-.IP 3.
-Verify Ed25519 signature (AUTHORITATIVE - never skipped)
-.IP 4.
-If online, query registry for:
-.RS
-.IP \(bu 2
-Key recognition and status
-.IP \(bu
-Artifact ledger status (active/revoked)
-.RE
-.IP 5.
-Display results with clear trust indicators
-.SH TRUST MODEL
-VWH uses a two-tier trust model:
-.TP
-.B Cryptographic Validity (Authoritative)
-Local Ed25519 signature verification. This is the authoritative source of artifact integrity and cannot be overridden by registry data.
-.TP
-.B Registry Trust Status (Advisory)
-Network registry provides advisory information:
-.RS
-.IP \(bu 2
-Is signing key recognized?
-.IP \(bu
-Has key been revoked?
-.IP \(bu
-Has artifact been publicly acknowledged or revoked?
-.RE
-.PP
-Registry failure or unavailability NEVER invalidates a cryptographically valid signature.
-.SH OUTPUT
-The inspector displays:
-.IP \(bu 2
-File information (path, size)
-.IP \(bu
-Artifact metadata (ID, intent, timestamp, state)
-.IP \(bu
-Cryptographic verification status
-.IP \(bu
-SEAL flag status
-.IP \(bu
-Registry trust status (if online)
-.IP \(bu
-Key recognition and status
-.IP \(bu
-Ledger status if applicable
+Author + seal signatures present. Immutable.
 .SH EXIT STATUS
 .TP
 .B 0
-Success. All verifications passed.
+Artifact verified (all signatures valid, key not revoked); or command succeeded.
 .TP
 .B 1
-Error. Verification failed or file could not be read.
+Fatal error (I/O, argument parsing, internal error).
+.TP
+.B 2
+Cryptographic failure (invalid signature, revoked key, tampered content).
+.TP
+.B 3
+Registry unavailable, but cryptographic verification passed.
 .SH EXAMPLES
 .TP
-.B Inspect with default registry:
-.nf
-vwh inspect artifact.vwh
-.fi
-.TP
-.B Inspect offline:
+.B Verify an artifact offline:
 .nf
 vwh inspect artifact.vwh --offline
 .fi
 .TP
-.B Use custom registry:
+.B Author, sign, and seal:
 .nf
-vwh inspect artifact.vwh --registry https://example.com/registry
+vwh key init --type signing
+vwh key init --type sealing
+vwh create --intent lab
+vwh sign artifact.vwh
+vwh seal artifact.vwh
 .fi
 .TP
-.B Use environment variable:
+.B Publish to your own registry:
 .nf
-export VWH_REGISTRY_URL=https://example.com/registry
-vwh inspect artifact.vwh
+export VWH_REGISTRY_URL=https://example.com/vwh-registry
+vwh create --intent research
 .fi
-.SH FILES
-No local files are used by the inspector. All verification is based on the artifact file and optional network registry.
-.SH SECURITY
-.TP
-.B Network Security
-The inspector uses HTTPS with strict settings:
-.RS
-.IP \(bu 2
-5-second timeout
-.IP \(bu
-No redirect following (security)
-.IP \(bu
-All network errors treated as "registry unavailable"
-.RE
-.TP
-.B Cryptographic Security
-.RS
-.IP \(bu 2
-Ed25519 signatures (32-byte keys, 64-byte signatures)
-.IP \(bu
-BLAKE3 hashing for artifact IDs and key fingerprints
-.IP \(bu
-Constant-time signature verification
-.RE
-.SH DIAGNOSTICS
-The inspector provides clear diagnostic messages:
-.TP
-.B ✓
-Success indicator (green checkmark)
-.TP
-.B ✗
-Failure indicator (red X)
-.TP
-.B ⚠
-Warning indicator (yellow warning sign)
-.TP
-.B ℹ
-Information indicator (blue info sign)
-.TP
-.B ⊗
-Revocation indicator (crossed circle)
+.SH TRUST MODEL
+Local Ed25519 signature verification and BLAKE3 note hashing are authoritative
+and cannot be overridden by registry data. Registry key status and artifact
+acknowledgment are advisory; registry failure never invalidates a valid
+signature.
 .SH SEE ALSO
-.BR vwh-author (1)
-.PP
-Full documentation: /usr/share/doc/vwh/README.md
-.PP
-Specification: /usr/share/doc/vwh/SPEC.md
+Full documentation, specification, and the "Frame Me" challenge:
+.I https://github.com/notvcto/vwh
 .SH AUTHOR
-Written for the VWH project.
-.SH BUGS
-Report bugs to: [project bug tracker]
+Victor Enrique Soto <contact@notvc.to>
 .SH COPYRIGHT
-Copyright © 2026. License information: [license]
+Copyright \(co 2026. MIT License.

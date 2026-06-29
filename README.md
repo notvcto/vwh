@@ -23,6 +23,8 @@ Draft → Signed → Sealed
 
 V2 artifacts carry a BLAKE3 note hash. The note itself lives in a `.vwh.note` sidecar file. If the hash doesn't match, `vwh inspect` tells you.
 
+As of **4.0**, `vwh` is a **single binary** that does both halves of the system: **inspecting** (no keys required) and **authoring** (create / sign / seal / rotate / revoke / publish). There is no separate `vwh-author` tool anymore.
+
 ---
 
 ## Install
@@ -40,27 +42,22 @@ cargo build --release
 
 ---
 
-## Usage
+## Two roles
 
-**Inspect an artifact:**
+`vwh` serves two audiences from one binary:
 
-```bash
-vwh inspect artifact.vwh
-```
+- **Inspectors** verify artifacts. They never need keys or a keystore.
+- **Authors** hold keys and produce artifacts. Their identity lives in `~/.vwh` (see [Keystore](#keystore)).
 
-**Read the attached note:**
-
-```bash
-vwh note artifact.vwh
-```
-
-**Offline (skip registry check):**
+### Inspecting
 
 ```bash
-vwh inspect artifact.vwh --offline
+vwh inspect artifact.vwh           # verify signatures + registry status
+vwh note artifact.vwh              # show the attached note (BLAKE3-verified)
+vwh inspect artifact.vwh --offline # skip the registry, crypto only
 ```
 
-**Custom registry:**
+Override the registry an artifact points at:
 
 ```bash
 vwh inspect artifact.vwh --registry https://example.com/vwh-registry
@@ -69,6 +66,74 @@ export VWH_REGISTRY_URL=https://example.com/vwh-registry
 vwh inspect artifact.vwh
 ```
 
+### Authoring
+
+```bash
+# One-time: create a signing identity and a sealing identity
+vwh key init --type signing
+vwh key init --type sealing
+
+# Author → sign → seal
+vwh create --intent lab            # writes artifact.vwh + artifact.vwh.note
+vwh sign  artifact.vwh
+vwh seal  artifact.vwh
+
+# Inspect what you just made
+vwh inspect artifact.vwh --offline
+```
+
+Other authoring commands:
+
+| Command | What it does |
+|---|---|
+| `vwh key show [name]` | Display a key's public key + fingerprint |
+| `vwh key rotate` | Generate a new key, mark the old one deprecated |
+| `vwh unseal <file>` | Remove a seal (V2), returning to Signed |
+| `vwh unsign <file>` | Strip the author signature back to a keyless draft |
+| `vwh edit <file>` | Edit draft metadata (intent) |
+| `vwh revoke key --reason ...` | Revoke a signing/sealing key |
+| `vwh revoke artifact <id> --reason ...` | Revoke an artifact in the ledger |
+| `vwh dump keys` / `vwh dump ledger` | Print local registry state as JSON |
+| `vwh push` | Publish the local registry to the remote git repo (GPG-signed commit) |
+
+### Coming in 4.x
+
+The following lifecycle commands are scaffolded in the CLI and will be filled in across the 4.x series. They currently print a "not yet implemented" notice:
+
+`vwh init` (guided first-time setup) · `vwh config` (manage configuration) · `vwh rebase` (rebase the local registry) · `vwh export` (encrypted backup of `~/.vwh`) · `vwh restore` (restore from a backup).
+
+---
+
+## Keystore
+
+Authoring state lives under `~/.vwh`:
+
+```
+~/.vwh/
+├── keys/<name>/        identity.key.enc, identity.pub, metadata.json
+├── keys.json           local key registry
+├── ledger.json         local artifact ledger
+└── registry/           git clone of the published registry
+```
+
+Private keys are encrypted with Argon2id + ChaCha20-Poly1305 and never written in the clear.
+
+**Upgrading from 3.x?** Earlier releases stored author state under the platform config dir for `vwh-author` (e.g. `~/.config/vwh-author`). The first time you run any `vwh` command, that state is **copied** into `~/.vwh` automatically — keys are nested under `keys/`, and your originals are left untouched until you've verified the move.
+
+---
+
+## Per-artifact registry
+
+Trust is not centralized on `notvc.to`. Each artifact created by 4.0 records the registry it belongs to in its `.vwh.note` header:
+
+```
+registry: https://notvc.to/vwh-registry
+
+<your human-readable note body>
+```
+
+The whole note — header included — is what gets BLAKE3-hashed into the artifact, so the declared registry is as tamper-evident as the note itself. When inspecting, `vwh` consults that registry by default. Precedence is: `--registry` / `VWH_REGISTRY_URL` > the artifact's declared registry > the built-in default. Set your own with `VWH_REGISTRY_URL` at `create` time, and anyone can run their own registry.
+
 ---
 
 ## What `vwh inspect` checks
@@ -76,10 +141,10 @@ vwh inspect artifact.vwh
 In order:
 
 1. **Artifact parse** — is this a valid `.vwh` file?
-2. **Note verification** — if V2, does the sidecar hash match?
+2. **Note verification** — if V2, does the sidecar hash match? (the registry is read from the verified note)
 3. **Author signature** — Ed25519 over the artifact body
 4. **Seal signature** — if sealed, Ed25519 over the artifact including the seal key
-5. **Registry commit signature** — is the latest commit to the registry GPG-signed? If not, falls back to the last signed commit
+5. **Registry anchoring** — the registry's `index.html` declares its backing GitHub repo; the inspector GPG-checks that repo's commit and reads `keys.json`/`ledger.json` **at the verified SHA** (falling back to the last signed commit if HEAD isn't signed). No repo declared → registry data is advisory (TLS only).
 6. **Key status** — is the signing key active, deprecated, or revoked? If deprecated, did the artifact predate the rotation?
 7. **Ledger status** — is this artifact publicly acknowledged, or sealed but absent from the ledger (suspicious)?
 
@@ -91,9 +156,15 @@ A valid signature with an unsigned registry commit gets called out. A valid sign
 
 Default registry: `https://notvc.to/vwh-registry`
 
-The registry is backed by a public git repo (`github.com/notvcto/vwh-registry`). Before trusting registry data, the inspector checks whether the HEAD commit is GPG-signed. If it isn't (possible tampered push, CI key, or mistake) it walks back through the last 20 commits, finds the most recent signed one, and fetches `keys.json` and `ledger.json` at that SHA instead.
+A registry is any GitHub-Pages site that serves `keys.json`/`ledger.json` plus an `index.html` declaring its backing repo:
 
-Registry data is always advisory. Signature verification is always local and offline-first.
+```html
+<meta name="vwh-registry-repo" content="owner/repo">
+```
+
+The inspector reads that descriptor over TLS, asks the GitHub API whether the repo's commit is GPG-signed, and pulls the registry data **at the verified commit's SHA** — so the published Pages copy lagging behind the repo never matters. `notvc.to` is just the *default value*, verified through the exact same path as anyone else's registry; there is no hardcoded special case. The repo is asserted by the registry operator (via its own `index.html`), not by the artifact, so an artifact can't redirect verification to an arbitrary repo.
+
+Registry data is always advisory — a signed, repo-backed registry proves *"this data was committed by GitHub account X,"* not that X is who you should trust. Signature verification is always local and offline-first.
 
 ---
 
@@ -154,11 +225,11 @@ The registry flags these keys `"is_demo": true`. Independently of status. A vali
 ## Architecture
 
 ```
-vwh-core    — format, parsing, signing, verification (library)
-vwh         — public inspector CLI (this crate)
+vwh-core    — format, parsing, signing, verification (library, on crates.io)
+vwh         — the single CLI: inspect + author (this crate)
 ```
 
-The private authoring tool (`vwh-author`) is not published. It handles key generation, signing, sealing, key rotation, revocation, and registry publishing.
+`vwh-core` is the reusable, crypto-and-format-only library. `vwh` is the one binary everyone installs; whether you're verifying someone else's artifact or minting your own, it's the same tool. (Prior to 4.0, authoring lived in a separate, unpublished `vwh-author` binary — that split is gone.)
 
 ---
 
@@ -168,6 +239,8 @@ The private authoring tool (`vwh-author`) is not published. It handles key gener
 cargo test --workspace
 cargo fmt --check
 cargo clippy --workspace -- -D warnings
+# or run all of the above:
+./build.sh
 ```
 
 ---

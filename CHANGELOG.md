@@ -6,6 +6,59 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — Versioning:
 
 ---
 
+## [4.0.0] - 2026-06-29
+
+### Breaking
+
+- **One binary.** The previously-private `vwh-author` tool is merged into the
+  public `vwh` binary. Authoring (`create`, `sign`, `seal`, `unseal`, `unsign`,
+  `edit`, `key`, `revoke`, `dump`, `push`) and inspecting (`inspect`, `note`)
+  now ship together. `vwh-author` no longer exists as a separate binary or repo.
+- **Keystore moved to `~/.vwh`.** Author state (keys, `keys.json`, `ledger.json`,
+  registry clone) now lives under `~/.vwh`, with keys nested under `~/.vwh/keys/`.
+  Previous releases used the platform config dir for `vwh-author`
+  (e.g. `~/.config/vwh-author`).
+
+### Added
+
+#### vwh
+
+- **Automatic keystore migration**: on first run, an existing
+  `~/.config/vwh-author` keystore is **copied** into `~/.vwh` (keys nested under
+  `keys/`). Non-destructive and idempotent — originals are left in place until
+  you remove them.
+- **Per-artifact registry**: `create` stamps a `registry:` header into the
+  `.vwh.note` (covered by `NOTE_HASH`, so it is tamper-evident). `inspect`
+  resolves the registry as `--registry`/`VWH_REGISTRY_URL` > the note's declared
+  registry > the built-in default. Source the value at creation time with
+  `VWH_REGISTRY_URL`.
+- **Registry discovery + commit anchoring (generic)**: a registry serves an
+  `index.html` declaring its backing GitHub repo
+  (`<meta name="vwh-registry-repo" content="owner/repo">`). `inspect` reads that
+  descriptor, GPG-verifies the repo's commit, and reads `keys.json`/`ledger.json`
+  **at the verified SHA** (no longer the lagging Pages copy). Registries with no
+  declared repo are treated as advisory (TLS only). The hardcoded
+  `notvcto/vwh-registry` constant is removed — notvc.to is now just the default
+  registry, verified through the same path as any community registry.
+- **Lifecycle commands scaffolded**: `init`, `config`, `rebase`, `export`,
+  `restore` exist in the CLI and currently report "not yet implemented"; they
+  will be filled in across the 4.x series.
+
+### Changed
+
+- `vwh-core` bumped to 4.0.0 (no API or format change from 3.0.0; version
+  realigned with the unified release line).
+- The artifact binary format is **unchanged** — v2 (256 bytes) artifacts created
+  by 3.x verify identically under 4.0.
+
+### Other
+
+- Single public repository; the private `vwh-author` repo is retired.
+- Documentation (README, crate READMEs, SPEC, man page) updated for the unified
+  tool.
+
+---
+
 ## [3.0.0] - 2026-06-17
 
 ### Breaking

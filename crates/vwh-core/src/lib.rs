@@ -107,6 +107,9 @@ impl Intent {
         ]
     }
 
+    // Inherent `from_str` predates a `FromStr` impl; keep the name for API
+    // stability. (Pre-existing lint, silenced — not a refactor.)
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self> {
         match s.to_uppercase().as_str() {
             "LAB" => Ok(Intent::Lab),

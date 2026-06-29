@@ -71,15 +71,42 @@ from `SEAL_SIGNATURE` (see "Artifact States" below).
 
 Every v2 artifact has a companion **note file**, distributed alongside the
 binary artifact with the conventional name `<artifact>.vwh.note`. The note is
-a plain UTF-8 text file containing a human-readable description of the
-artifact's purpose, authored interactively at creation time.
+a UTF-8 text file containing a human-readable description of the artifact's
+purpose, authored interactively at creation time.
 
-`NOTE_HASH` is `BLAKE3(note_file_bytes)`. A verifier with access to both files
-can confirm the note has not been altered or substituted independently of the
-artifact.
+`NOTE_HASH` is `BLAKE3(note_file_bytes)` — over the **entire** file, header and
+body alike. A verifier with access to both files can confirm the note has not
+been altered or substituted independently of the artifact.
 
 The note is **required** for v2 artifacts — an empty or missing note is a
 validation error at creation time.
+
+#### Note header block (optional)
+
+A note MAY begin with a header block: one or more `key: value` lines,
+terminated by a blank line, followed by the freeform body.
+
+```
+registry: https://notvc.to/vwh-registry
+
+Routine lab capture — see ticket #1234.
+```
+
+A leading block is interpreted as headers only if it is terminated by a blank
+line and every line in it is a well-formed `key: value` pair; otherwise the
+whole file is body and there are no headers. Notes with no header block (the
+pre-4.0 freeform style) therefore continue to parse and verify unchanged.
+
+Because the header is inside the hashed bytes, header values are exactly as
+tamper-evident as the body.
+
+Defined header keys:
+
+| Key        | Meaning |
+|------------|---------|
+| `registry` | The registry this artifact belongs to (see "Registry" below). Written by `create`; read by `inspect`. |
+
+Unknown header keys are ignored by current tooling and reserved for future use.
 
 ### SEAL_PUBKEY / SEAL_SIGNATURE
 
@@ -202,9 +229,60 @@ tampering or substitution).
 
 ## Registry (Optional)
 
-Default registry base URL:
+The registry is not a single fixed endpoint. An artifact declares the registry
+it belongs to via the `registry:` note header (see "Note header block" above),
+allowing anyone to operate their own registry. A verifier resolves the registry
+base URL with the following precedence:
 
-- `https://notvc.to/vwh-registry`
+1. An explicit override (`--registry` flag or `VWH_REGISTRY_URL` environment
+   variable)
+2. The `registry:` header of the artifact's verified note
+3. The built-in default base URL: `https://notvc.to/vwh-registry`
+
+### Registry descriptor (`index.html`)
+
+A registry **must** serve an `index.html` at its base URL carrying a descriptor
+in `<head>`, so that a verifier can discover the registry's backing GitHub
+repository without it being hardcoded:
+
+```html
+<meta name="vwh-registry"      content="v2">
+<meta name="vwh-registry-repo" content="owner/repo">
+<meta name="vwh-registry-url"  content="https://example.com/vwh-registry">
+```
+
+| Meta name           | Meaning |
+|---------------------|---------|
+| `vwh-registry`      | Schema marker (`v2`). |
+| `vwh-registry-repo` | The GitHub repository (`owner/repo`) the registry data is committed to — the trust anchor. |
+| `vwh-registry-url`  | The registry's canonical base URL (self-reference). |
+
+The descriptor is served over TLS from the registry's own origin, so the repo
+it names is asserted by the **registry operator**, not by the artifact author —
+this is what prevents an artifact from redirecting verification to an arbitrary
+repo.
+
+### Commit anchoring
+
+For a registry that declares a `vwh-registry-repo`, a verifier:
+
+1. Queries the GitHub API for the repo's `HEAD` commit and its GPG/SSH
+   verification status.
+2. If `HEAD` is verified, treats that commit as the trust anchor. If it is not,
+   walks back through recent commits to the most recent verified one (and
+   surfaces that `HEAD` was unsigned).
+3. Reads `keys.json` / `ledger.json` **at the verified commit's SHA** (via the
+   repository contents API), not from the live web copy — the published Pages
+   copy can lag the repository.
+
+If no verified commit exists, or the registry declares no repo, registry data
+is treated as **advisory (transport-trust only)** and labelled as such. In all
+cases this affects only the *advisory* registry layer; local signature and note
+verification remain authoritative regardless.
+
+A signed, repo-backed registry still only proves *"this data was committed by
+GitHub account X."* Whether to trust account X for these keys is the verifier's
+out-of-band decision; the registry never establishes identity.
 
 Registry data is versioned by path. Current tooling fetches the v2 endpoints:
 

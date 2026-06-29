@@ -1,29 +1,24 @@
-// Exit codes:
-//   0 = artifact verified (all signatures valid, key not revoked)
-//   1 = fatal error (I/O, argument parsing, internal error)
-//   2 = cryptographic failure (invalid signature, revoked key, tampered content)
-//   3 = registry unavailable (could not fetch registry, but crypto passed)
-
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use serde::Deserialize;
-use std::fs;
+use anyhow::Result;
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-use vwh_core::{format::Artifact, verify::verify_artifact};
 
-const DEFAULT_REGISTRY_URL: &str = "https://notvc.to/vwh-registry";
-const SECTION_SEP: &str = "-----------------------------------------";
-const REGISTRY_GITHUB_REPO: &str = "notvcto/vwh-registry";
-const GITHUB_API_BASE: &str = "https://api.github.com";
-
-fn print_sep() {
-    println!("{}\n", SECTION_SEP);
-}
-
+mod commands;
+mod inspect;
+mod key;
+mod migrate;
+mod note_meta;
+mod prompts;
+mod registry;
+mod state;
 
 #[derive(Parser)]
 #[command(name = "vwh")]
-#[command(about = "VWH artifact inspector (PUBLIC)", long_about = None)]
+#[command(version)]
+#[command(
+    about = "VWH — cryptographic accountability for digital presence",
+    long_about = "Create, sign, seal, and inspect .vwh artifacts. A single binary for both \
+                  authors (who hold keys) and inspectors (who verify)."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -31,7 +26,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Inspect a .vwh artifact
+    // ── Inspector (no keys required) ───────────────────────────────
+    /// Inspect a .vwh artifact (verify signatures + registry status)
     Inspect {
         /// Path to .vwh file
         file: PathBuf,
@@ -40,802 +36,253 @@ enum Commands {
         #[arg(long)]
         offline: bool,
 
-        /// Custom registry base URL
+        /// Custom registry base URL (overrides the artifact's own registry)
         #[arg(long, env = "VWH_REGISTRY_URL")]
         registry: Option<String>,
     },
+
     /// Display the note attached to a V2 artifact
     Note {
         /// Path to .vwh artifact file
         file: PathBuf,
     },
-}
 
-// Registry data structures - v1 format
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct KeysRegistry {
-    version: u32,
-    updated_at: String,
-    keys: Vec<KeyEntry>,
-}
+    // ── Authoring (requires keys in ~/.vwh) ────────────────────────
+    /// Key management operations
+    #[command(subcommand)]
+    Key(KeyCommands),
 
-#[derive(Debug, Deserialize)]
-struct KeyEntry {
-    fingerprint: String,
-    #[allow(dead_code)]
-    public_key: String,
-    created_at: String,
-    status: String,  // "active" | "deprecated" | "revoked"
-    label: Option<String>,
-    deprecated_at: Option<String>,  // RFC3339, stamped on rotation
-    revoked_at: Option<String>,     // RFC3339, stamped on revocation
-    #[serde(default)]
-    is_demo: bool,
-}
+    /// Revocation operations
+    #[command(subcommand)]
+    Revoke(RevokeCommands),
 
-#[derive(Debug, Deserialize)]
-struct LedgerRegistry {
-    #[allow(dead_code)]
-    version: u32,
-    updated_at: String,
-    artifacts: Vec<LedgerEntry>,
-}
+    /// Create a new unsigned .vwh draft
+    Create {
+        /// Intent (interactive prompt if not provided)
+        #[arg(long)]
+        intent: Option<String>,
 
-#[derive(Debug, Deserialize)]
-struct LedgerEntry {
-    id: String,
-    fingerprint: String,
-    #[serde(default)]
-    created_at: Option<String>,
-    status: String, // "active" | "revoked"
-    revoked_at: Option<String>,
-    reason: Option<String>,
-}
+        /// Output file path (interactive prompt if not provided)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
 
-enum RegistryStatus {
-    Available {
-        keys: KeysRegistry,
-        ledger: LedgerRegistry,
+        /// Use v1 format (128 bytes, no note) - default is v2
+        #[arg(long)]
+        v1: bool,
     },
-    Unavailable(String),
+
+    /// Sign an unsigned draft artifact
+    Sign {
+        /// Path to unsigned .vwh file
+        file: PathBuf,
+
+        /// Optional: specify which key to use for signing (default: active key)
+        #[arg(long)]
+        key: Option<String>,
+    },
+
+    /// Seal a signed artifact
+    Seal {
+        /// Path to signed .vwh file
+        file: PathBuf,
+
+        /// Sealing key to use (auto-selects if only one sealing key exists)
+        #[arg(long)]
+        key: Option<String>,
+    },
+
+    /// Unseal a sealed artifact (V2 only - removes seal signature)
+    Unseal {
+        /// Path to sealed .vwh file
+        file: PathBuf,
+    },
+
+    /// Unsign a signed artifact (not sealed, not revoked)
+    Unsign {
+        /// Path to signed .vwh file
+        file: PathBuf,
+    },
+
+    /// Edit draft artifact metadata
+    Edit {
+        /// Path to draft .vwh file
+        file: PathBuf,
+
+        /// New intent
+        #[arg(long)]
+        intent: Option<String>,
+
+        /// New note
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Dump local registry state as JSON
+    Dump {
+        /// What to dump
+        #[arg(value_enum)]
+        target: DumpTarget,
+    },
+
+    /// Push local registry to the remote git repo (GPG-signs the commit)
+    Push,
+
+    // ── First-class lifecycle (4.x — not yet implemented) ──────────
+    /// First-time setup: generate/import keys, bootstrap registry
+    Init,
+
+    /// Manage existing vwh configuration
+    Config,
+
+    /// Rebase the local registry onto the remote
+    Rebase,
+
+    /// Back up the entire ~/.vwh (mandatory encryption)
+    Export,
+
+    /// Restore ~/.vwh from an encrypted backup
+    Restore,
 }
 
-#[derive(Deserialize)]
-struct GithubCommit {
-    sha: String,
-    commit: GithubCommitInner,
+#[derive(Subcommand)]
+enum KeyCommands {
+    /// Initialize new Ed25519 identity key
+    Init {
+        /// Optional key name (auto-generated if not provided)
+        name: Option<String>,
+
+        /// Key type: 'signing' or 'sealing' (prompted if not provided)
+        #[arg(long)]
+        r#type: Option<String>,
+
+        /// Optional label for the key
+        #[arg(long)]
+        label: Option<String>,
+    },
+
+    /// Display public key and fingerprint
+    Show {
+        /// Optional key name to show (shows active key if not provided)
+        name: Option<String>,
+    },
+
+    /// Rotate to new key (mark current as deprecated)
+    Rotate,
 }
 
-#[derive(Deserialize)]
-struct GithubCommitInner {
-    verification: GithubVerification,
+#[derive(Subcommand)]
+enum RevokeCommands {
+    /// Revoke a signing key
+    Key {
+        /// Revocation reason
+        #[arg(long, required = true)]
+        reason: String,
+
+        /// Optional note
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Revoke an artifact
+    Artifact {
+        /// Artifact ID (32-char hex)
+        #[arg(required = true)]
+        artifact_id: String,
+
+        /// Revocation reason
+        #[arg(long, required = true)]
+        reason: String,
+
+        /// Optional note
+        #[arg(long)]
+        note: Option<String>,
+    },
 }
 
-#[derive(Deserialize)]
-struct GithubVerification {
-    verified: bool,
-    reason: String,
+#[derive(ValueEnum, Clone)]
+pub enum DumpTarget {
+    Keys,
+    Ledger,
 }
 
-enum CommitCheck {
-    Signed { sha: String },
-    Unsigned { reason: String, sha: String, fallback_sha: Option<String> },
-    Unavailable(String),
-}
-
-fn fetch_registry(base_url: &str, offline: bool, artifact_version: u16, client: &reqwest::blocking::Client) -> RegistryStatus {
-    if offline {
-        return RegistryStatus::Unavailable("Offline mode".to_string());
-    }
-
-    // Use versioned registry path
-    let base = base_url.trim_end_matches('/');
-    let registry_path = format!("{}/v{}", base, artifact_version);
-    let keys_url = format!("{}/keys.json", registry_path);
-    let ledger_url = format!("{}/ledger.json", registry_path);
-
-    // Fetch keys.json
-    let keys = match client.get(&keys_url).send() {
-        Ok(resp) => {
-            if !resp.status().is_success() {
-                return RegistryStatus::Unavailable(format!("HTTP {}: {}", resp.status(), keys_url));
-            }
-            match resp.json::<KeysRegistry>() {
-                Ok(k) => k,
-                Err(e) => return RegistryStatus::Unavailable(format!("Failed to parse keys.json: {}", e)),
-            }
-        }
-        Err(e) => return RegistryStatus::Unavailable(format!("Failed to fetch keys.json: {}", e)),
-    };
-
-    // Fetch ledger.json
-    let ledger = match client.get(&ledger_url).send() {
-        Ok(resp) => {
-            if !resp.status().is_success() {
-                return RegistryStatus::Unavailable(format!("HTTP {}: {}", resp.status(), ledger_url));
-            }
-            match resp.json::<LedgerRegistry>() {
-                Ok(r) => r,
-                Err(e) => return RegistryStatus::Unavailable(format!("Failed to parse ledger.json: {}", e)),
-            }
-        }
-        Err(e) => return RegistryStatus::Unavailable(format!("Failed to fetch ledger.json: {}", e)),
-    };
-
-    RegistryStatus::Available { keys, ledger }
-}
-
-fn check_commit_signature(client: &reqwest::blocking::Client) -> CommitCheck {
-    let url = format!("{}/repos/{}/commits/HEAD", GITHUB_API_BASE, REGISTRY_GITHUB_REPO);
-    let head: GithubCommit = match client.get(&url).send() {
-        Ok(r) if r.status().is_success() => match r.json() {
-            Ok(c) => c,
-            Err(e) => return CommitCheck::Unavailable(format!("GitHub API parse error: {}", e)),
-        },
-        Ok(r) => return CommitCheck::Unavailable(format!("GitHub API HTTP {}", r.status())),
-        Err(e) => return CommitCheck::Unavailable(format!("GitHub API unreachable: {}", e)),
-    };
-
-    if head.commit.verification.verified {
-        return CommitCheck::Signed { sha: head.sha };
-    }
-
-    let list_url = format!("{}/repos/{}/commits?per_page=20", GITHUB_API_BASE, REGISTRY_GITHUB_REPO);
-    let commits: Vec<GithubCommit> = client
-        .get(&list_url)
-        .send()
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: {}", e); e })
-        .ok()
-        .and_then(|r| r.json().ok())
-        .unwrap_or_default();
-
-    let fallback_sha = commits.iter()
-        .find(|c| c.commit.verification.verified)
-        .map(|c| c.sha.clone());
-
-    CommitCheck::Unsigned {
-        reason: head.commit.verification.reason,
-        sha: head.sha,
-        fallback_sha,
-    }
-}
-
-fn fetch_at_commit(sha: &str, artifact_version: u16, client: &reqwest::blocking::Client) -> Option<(KeysRegistry, LedgerRegistry)> {
-    let base = format!(
-        "{}/repos/{}/contents/v{}",
-        GITHUB_API_BASE, REGISTRY_GITHUB_REPO, artifact_version
-    );
-
-    let keys_bytes = client
-        .get(format!("{}/keys.json?ref={}", base, sha))
-        .header("Accept", "application/vnd.github.raw")
-        .send()
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: failed to fetch keys.json: {}", e); e })
-        .ok()?
-        .bytes()
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: failed to read keys.json bytes: {}", e); e })
-        .ok()?;
-
-    let ledger_bytes = client
-        .get(format!("{}/ledger.json?ref={}", base, sha))
-        .header("Accept", "application/vnd.github.raw")
-        .send()
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: failed to fetch ledger.json: {}", e); e })
-        .ok()?
-        .bytes()
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: failed to read ledger.json bytes: {}", e); e })
-        .ok()?;
-
-    let keys = serde_json::from_slice::<KeysRegistry>(&keys_bytes)
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: failed to parse keys.json: {}", e); e })
-        .ok()?;
-    let ledger = serde_json::from_slice::<LedgerRegistry>(&ledger_bytes)
-        .map_err(|e| { eprintln!("[WARN] fetch_at_commit: failed to parse ledger.json: {}", e); e })
-        .ok()?;
-
-    Some((keys, ledger))
-}
-
-fn inspect(file: PathBuf, offline: bool, registry_url: Option<String>) -> Result<()> {
-    println!("\n== VWH Artifact Inspector ==\n");
-
-    // Single shared HTTP client for all network operations (M8 + M9)
-    let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(10))
-        .user_agent("vwh-inspector/2.0")
-        .build()?;
-
-    // Read artifact
-    let bytes = fs::read(&file)
-        .with_context(|| format!("Failed to read file: {}", file.display()))?;
-
-    println!("File: {}", file.display());
-    println!("Size: {} bytes\n", bytes.len());
-
-    // Parse artifact
-    let artifact = Artifact::from_bytes(&bytes)
-        .context("Failed to parse artifact")?;
-
-    print_sep();
-    println!("Artifact Information:\n");
-    println!("  ID:          {}", artifact.artifact_id);
-    println!("  Intent:      {}", artifact.intent);
-    println!("  Created:     {}", artifact.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
-    println!("  Version:     {}", artifact.version.as_u16());
-
-    // Display state with v2-aware descriptions
-    let state = artifact.state();
-    let state_str = match (&artifact.version, state) {
-        (vwh_core::format::ArtifactVersion::V1, vwh_core::ArtifactState::Draft) => {
-            if artifact.has_author_pubkey() {
-                "DRAFT (unsigned, bound to key)"
-            } else {
-                "DRAFT (keyless)"
-            }
-        },
-        (vwh_core::format::ArtifactVersion::V1, vwh_core::ArtifactState::Signed) => {
-            "SIGNED (unsealed)"
-        },
-        (vwh_core::format::ArtifactVersion::V1, vwh_core::ArtifactState::Sealed) => {
-            "SEALED"
-        },
-        (vwh_core::format::ArtifactVersion::V2, vwh_core::ArtifactState::Draft) => {
-            "DRAFT (no author signature)"
-        },
-        (vwh_core::format::ArtifactVersion::V2, vwh_core::ArtifactState::Signed) => {
-            "SIGNED (author only, not sealed)"
-        },
-        (vwh_core::format::ArtifactVersion::V2, vwh_core::ArtifactState::Sealed) => {
-            "SEALED (dual-signed, immutable)"
-        },
-    };
-    println!("  State:       {}", state_str);
-
-    // V1-specific: show flags
-    if artifact.version == vwh_core::format::ArtifactVersion::V1 {
-        println!("  Flags:       0x{:02x}", artifact.flags);
-        if artifact.is_sealed() {
-            println!("  Sealed:      YES (immutable)");
-        }
-    }
-
-    // Display keys based on version
-    match artifact.version {
-        vwh_core::format::ArtifactVersion::V1 => {
-            if artifact.has_author_pubkey() {
-                println!("\n  Public Key:  {}", hex::encode(artifact.author_pubkey));
-                println!("  Fingerprint: {}", artifact.author_fingerprint().to_hex());
-                println!("  Short FP:    {}\n", artifact.author_fingerprint().short_display());
-            } else {
-                println!("\n  Public Key:  (not bound to any key yet)");
-                println!("  Fingerprint: (none)\n");
-            }
-        },
-        vwh_core::format::ArtifactVersion::V2 => {
-            // Author key
-            if artifact.has_author_pubkey() {
-                println!("\n  Author Key:  {}", hex::encode(artifact.author_pubkey));
-                println!("  Author FP:   {}", artifact.author_fingerprint().to_hex());
-            } else {
-                println!("\n  Author Key:  (not bound to any key yet)");
-                println!("  Author FP:   (none)");
-            }
-
-            // Seal key
-            if let Some(seal_fp) = artifact.seal_fingerprint() {
-                println!("  Seal Key:    {}", hex::encode(artifact.seal_pubkey));
-                println!("  Seal FP:     {}", seal_fp.to_hex());
-            } else {
-                println!("  Seal Key:    (not sealed)");
-                println!("  Seal FP:     (none)");
-            }
-            println!();
-        },
-    }
-
-    // Note verification (V2 only)
-    if artifact.version == vwh_core::format::ArtifactVersion::V2 {
-        print_sep();
-        println!("Note Verification:\n");
-
-        if artifact.has_note_hash() {
-            let note_path = file.with_extension("vwh.note");
-
-            if note_path.exists() {
-                match fs::read(&note_path) {
-                    Ok(note_content) => {
-                        let computed_hash = blake3::hash(&note_content);
-                        if computed_hash.as_bytes() == &artifact.note_hash {
-                            println!("  [OK] Note file found: {}", note_path.display());
-                            println!("  [OK] Note hash verified (BLAKE3)");
-                            println!("  [OK] Note integrity confirmed");
-                            println!("  [INFO] Run 'vwh note {}' to view note content.\n", file.display());
-                        } else {
-                            eprintln!("  [ERR] Note file found but hash MISMATCH");
-                            eprintln!("       Expected: {}", hex::encode(artifact.note_hash));
-                            eprintln!("       Got:      {}", hex::encode(computed_hash.as_bytes()));
-                            eprintln!("  [ERR] Note may have been tampered with");
-                            std::process::exit(2);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("  [ERR] Failed to read note file: {}", e);
-                        eprintln!("  [ERR] Cannot verify note integrity");
-                        std::process::exit(2);
-                    }
-                }
-            } else {
-                eprintln!("  [ERR] Note hash present but file NOT FOUND");
-                eprintln!("       Expected: {}", note_path.display());
-                eprintln!("  [ERR] This artifact is INVALID (missing required note)");
-                std::process::exit(2);
-            }
-        } else {
-            eprintln!("  [WARN] NO NOTE ATTACHED");
-            eprintln!("         Note hash is zero (edge case)");
-            eprintln!("         This should not happen in normal v2 workflow");
-        }
-    }
-
-    // Verify signature
-    print_sep();
-    println!("Cryptographic Verification:\n");
-
-    // Check SEAL flag consistency (V1) or dual signature (V2)
-    if artifact.version == vwh_core::format::ArtifactVersion::V1 {
-        if artifact.is_sealed() && !artifact.has_signature() {
-            eprintln!("  [ERR] INVALID: Artifact is sealed but unsigned");
-            eprintln!("  [ERR] This is a malformed artifact");
-            std::process::exit(2);
-        }
-    }
-
-    if !artifact.has_signature() {
-        if artifact.has_author_pubkey() {
-            println!("  [INFO] Artifact is unsigned but bound to a key");
-            println!("  [INFO] Can only be signed with the bound key");
-        } else {
-            println!("  [INFO] Artifact is keyless (not bound to any key)");
-            println!("  [INFO] Can be signed with any key");
-        }
-        println!("  [INFO] No signature to verify\n");
-        return Ok(());
-    }
-
-    // Verify author signature
-    match verify_artifact(&artifact) {
-        Ok(_) => {
-            println!("  [OK] Author signature valid");
-            println!("  [OK] Artifact integrity verified");
-
-            // V2: Check seal signature if present
-            if artifact.version == vwh_core::format::ArtifactVersion::V2 && artifact.is_sealed() {
-                // Verify seal signature
-                use vwh_core::crypto::verify;
-                let seal_bytes = match artifact.seal_signing_bytes() {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("  [ERR] Could not compute seal signing bytes: {}", e);
-                        std::process::exit(2);
-                    }
-                };
-                match verify(&artifact.seal_pubkey, &seal_bytes, &artifact.seal_signature) {
-                    Ok(_) => {
-                        println!("  [OK] Seal signature valid");
-                        println!("  [OK] DUAL-SIGNED (immutable)");
-                    }
-                    Err(e) => {
-                        eprintln!("  [ERR] Seal signature INVALID: {}", e);
-                        eprintln!("  [ERR] Artifact seal may be corrupted");
-                        std::process::exit(2);
-                    }
-                }
-            } else if artifact.version == vwh_core::format::ArtifactVersion::V1 && artifact.is_sealed() {
-                println!("  [OK] SEAL flag verified (artifact is immutable)");
-            }
-
-            println!();
-        }
-        Err(e) => {
-            eprintln!("  [ERR] Author signature INVALID: {}", e);
-            eprintln!("  [ERR] Artifact may be corrupted or tampered");
-            std::process::exit(2);
-        }
-    }
-
-    // Check for V2 seal signature via verify_seal
-    if artifact.version == vwh_core::format::ArtifactVersion::V2 && artifact.is_sealed() {
-        use vwh_core::verify::verify_seal;
-        if let Err(e) = verify_seal(&artifact) {
-            eprintln!("[ERR] Seal signature invalid: {}", e);
-            std::process::exit(2);
-        }
-    }
-
-    // Check registry
-    print_sep();
-    println!("Registry Status:\n");
-
-    let base_url = registry_url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL);
-    let artifact_version = artifact.version.as_u16();
-    let registry = fetch_registry(base_url, offline, artifact_version, &client);
-
-    match registry {
-        RegistryStatus::Available { mut keys, mut ledger } => {
-            println!("  [OK] Registry available");
-            println!("  [OK] Last updated: {}\n", ledger.updated_at);
-
-            // Commit signature check (default registry only)
-            if registry_url.is_none() {
-                match check_commit_signature(&client) {
-                    CommitCheck::Signed { sha } => {
-                        let sha_short = sha.get(..8).unwrap_or(&sha);
-                        println!("  [OK] Registry commit signed ({})\n", sha_short);
-                    }
-                    CommitCheck::Unsigned { reason, sha, fallback_sha } => {
-                        let sha_short = sha.get(..8).unwrap_or(&sha);
-                        eprintln!("  [ERR] REGISTRY COMMIT UNSIGNED — possible registry forgery");
-                        eprintln!("        HEAD {} not GPG-signed (reason: {})", sha_short, reason);
-                        if let Some(ref fb_sha) = fallback_sha {
-                            let fb_short = fb_sha.get(..8).unwrap_or(fb_sha.as_str());
-                            eprintln!("  [WARN] Falling back to last signed commit: {}", fb_short);
-                            match fetch_at_commit(fb_sha, artifact_version, &client) {
-                                Some((fb_keys, fb_ledger)) => {
-                                    let fb_short2 = fb_sha.get(..8).unwrap_or(fb_sha.as_str());
-                                    eprintln!("  [WARN] Using registry data from {}", fb_short2);
-                                    keys = fb_keys;
-                                    ledger = fb_ledger;
-                                }
-                                None => {
-                                    // fetch_at_commit already logged warnings; treat as CommitCheck::Unavailable
-                                    eprintln!("  [ERR] Could not fetch fallback — registry data untrusted");
-                                }
-                            }
-                        } else {
-                            eprintln!("  [ERR] No signed commits found in last 20 — registry untrusted");
-                        }
-                    }
-                    CommitCheck::Unavailable(reason) => {
-                        eprintln!("  [WARN] Could not verify registry commit signature: {}", reason);
-                    }
-                }
-            }
-
-            // ARCH-4: Check if signing key is revoked
-            if artifact.has_author_pubkey() {
-                let author_fp_hex = artifact.author_fingerprint().to_hex();
-                let key_entry = keys.keys.iter().find(|k| k.fingerprint == author_fp_hex);
-
-                match key_entry {
-                    Some(key) => {
-                        if key.status == "revoked" {
-                            eprintln!("[REVOKED] The signing key for this artifact has been revoked.");
-                            std::process::exit(2);
-                        }
-                    }
-                    None => {
-                        eprintln!("[WARN] Author key not found in registry");
-                    }
-                }
-            }
-
-            // Check key status (full display)
-            if artifact.has_author_pubkey() {
-                let fingerprint_hex = artifact.author_fingerprint().to_hex();
-                let key_entry = keys.keys.iter().find(|k| k.fingerprint == fingerprint_hex);
-
-                match key_entry {
-                    Some(key) => {
-                        if let Some(ref label) = key.label {
-                            println!("     Label:   {}", label);
-                        }
-                        println!("     Created: {}", key.created_at);
-
-                        match key.status.as_str() {
-                            "active" => {
-                                println!("  [OK] Signing key recognized (active)\n");
-                            }
-                            "deprecated" => {
-                                match &key.deprecated_at {
-                                    None => {
-                                        eprintln!("  [WARN] Signing key DEPRECATED");
-                                        eprintln!("     Rotation timestamp unavailable — cannot time-gate");
-                                    }
-                                    Some(dep_at) => {
-                                        match chrono::DateTime::parse_from_rfc3339(dep_at) {
-                                            Ok(dep_ts) => {
-                                                if artifact.timestamp < dep_ts {
-                                                    println!("  [OK] Signing key deprecated after signing — artifact valid");
-                                                    println!("     Deprecated: {}\n", dep_at);
-                                                } else {
-                                                    eprintln!("  [ERR] Artifact signed AFTER key was deprecated — INVALID");
-                                                    eprintln!("     Deprecated: {}", dep_at);
-                                                    std::process::exit(2);
-                                                }
-                                            }
-                                            Err(_) => {
-                                                eprintln!("  [WARN] Signing key DEPRECATED");
-                                                eprintln!("     Could not parse deprecation timestamp");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            "revoked" => {
-                                // already handled in ARCH-4 block above; this path won't be reached
-                                // but handle defensively for the time-gated case
-                                match &key.revoked_at {
-                                    None => {
-                                        eprintln!("  [WARN] Signing key REVOKED");
-                                        eprintln!("     Revocation timestamp unavailable — treat with caution");
-                                    }
-                                    Some(rev_at) => {
-                                        match chrono::DateTime::parse_from_rfc3339(rev_at) {
-                                            Ok(rev_ts) => {
-                                                if artifact.timestamp < rev_ts {
-                                                    eprintln!("  [WARN] Signing key later revoked — artifact predates revocation");
-                                                    eprintln!("     Revoked: {}", rev_at);
-                                                } else {
-                                                    eprintln!("  [ERR] Artifact signed AFTER key was revoked — INVALID");
-                                                    eprintln!("     Revoked: {}", rev_at);
-                                                    std::process::exit(2);
-                                                }
-                                            }
-                                            Err(_) => {
-                                                eprintln!("  [WARN] Signing key REVOKED");
-                                                eprintln!("     Could not parse revocation timestamp");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {
-                                eprintln!("  [WARN] Signing key has unknown status: {}", key.status);
-                            }
-                        }
-
-                        if key.is_demo {
-                            eprintln!("  [WARN] DEMO KEY — do not trust for attribution");
-                            eprintln!("     This key is intentionally public (Frame Me challenge).");
-                            eprintln!("     Valid signature ≠ Victor's presence.");
-                        }
-                    }
-                    None => {
-                        println!("  [INFO] Signing key not in registry");
-                        println!("     This may be expected for new or private keys\n");
-                    }
-                }
-            } else {
-                println!("  [INFO] Signing key not set (keyless draft)\n");
-            }
-
-            // Check seal key status (V2 sealed artifacts only)
-            if artifact.version == vwh_core::format::ArtifactVersion::V2 {
-                if let Some(seal_fp) = artifact.seal_fingerprint() {
-                    let seal_fp_hex = seal_fp.to_hex();
-
-                    // Revocation fast-exit before full display
-                    if let Some(key) = keys.keys.iter().find(|k| k.fingerprint == seal_fp_hex) {
-                        if key.status == "revoked" {
-                            eprintln!("[REVOKED] The sealing key for this artifact has been revoked.");
-                            std::process::exit(2);
-                        }
-                    }
-
-                    let seal_entry = keys.keys.iter().find(|k| k.fingerprint == seal_fp_hex);
-                    match seal_entry {
-                        Some(key) => {
-                            if let Some(ref label) = key.label {
-                                println!("     Label:   {}", label);
-                            }
-                            println!("     Created: {}", key.created_at);
-
-                            match key.status.as_str() {
-                                "active" => {
-                                    println!("  [OK] Sealing key recognized (active)\n");
-                                }
-                                "deprecated" => {
-                                    match &key.deprecated_at {
-                                        None => {
-                                            eprintln!("  [WARN] Sealing key DEPRECATED");
-                                            eprintln!("     Rotation timestamp unavailable — cannot time-gate");
-                                        }
-                                        Some(dep_at) => {
-                                            match chrono::DateTime::parse_from_rfc3339(dep_at) {
-                                                Ok(dep_ts) => {
-                                                    if artifact.timestamp < dep_ts {
-                                                        println!("  [OK] Sealing key deprecated after sealing — artifact valid");
-                                                        println!("     Deprecated: {}\n", dep_at);
-                                                    } else {
-                                                        eprintln!("  [ERR] Artifact sealed AFTER key was deprecated — INVALID");
-                                                        eprintln!("     Deprecated: {}", dep_at);
-                                                        std::process::exit(2);
-                                                    }
-                                                }
-                                                Err(_) => {
-                                                    eprintln!("  [WARN] Sealing key DEPRECATED");
-                                                    eprintln!("     Could not parse deprecation timestamp");
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                "revoked" => {
-                                    // fast-exit already handled above; defensive branch
-                                    match &key.revoked_at {
-                                        None => {
-                                            eprintln!("  [WARN] Sealing key REVOKED");
-                                            eprintln!("     Revocation timestamp unavailable");
-                                        }
-                                        Some(rev_at) => {
-                                            match chrono::DateTime::parse_from_rfc3339(rev_at) {
-                                                Ok(rev_ts) => {
-                                                    if artifact.timestamp < rev_ts {
-                                                        eprintln!("  [WARN] Sealing key later revoked — artifact predates revocation");
-                                                        eprintln!("     Revoked: {}", rev_at);
-                                                    } else {
-                                                        eprintln!("  [ERR] Artifact sealed AFTER key was revoked — INVALID");
-                                                        eprintln!("     Revoked: {}", rev_at);
-                                                        std::process::exit(2);
-                                                    }
-                                                }
-                                                Err(_) => {
-                                                    eprintln!("  [WARN] Sealing key REVOKED");
-                                                    eprintln!("     Could not parse revocation timestamp");
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    eprintln!("  [WARN] Sealing key has unknown status: {}", key.status);
-                                }
-                            }
-
-                            if key.is_demo {
-                                eprintln!("  [WARN] DEMO KEY — do not trust for attribution");
-                                eprintln!("     This key is intentionally public (Frame Me challenge).");
-                                eprintln!("     Valid seal ≠ Victor's presence.");
-                            }
-                        }
-                        None => {
-                            println!("  [INFO] Sealing key not in registry");
-                            println!("     This may be expected for private sealing keys\n");
-                        }
-                    }
-                }
-            }
-
-            // Check artifact ledger status
-            let artifact_id_hex = artifact.artifact_id.to_hex();
-            let ledger_entry = ledger
-                .artifacts
-                .iter()
-                .find(|a| a.id == artifact_id_hex);
-
-            match ledger_entry {
-                Some(entry) => {
-                    // If we have a pubkey, ensure ledger fingerprint matches artifact author fingerprint
-                    if artifact.has_author_pubkey() {
-                        let artifact_fp = artifact.author_fingerprint().to_hex();
-                        if entry.fingerprint != artifact_fp {
-                            eprintln!("  [WARN] Ledger fingerprint mismatch");
-                            eprintln!("     Ledger:   {}", entry.fingerprint);
-                            eprintln!("     Artifact: {}", artifact_fp);
-                        }
-                    }
-                    match entry.status.as_str() {
-                        "revoked" => {
-                            eprintln!("  [REVOKED] Artifact REVOKED");
-                            if let Some(ref revoked_at) = entry.revoked_at {
-                                eprintln!("     Revoked: {}", revoked_at);
-                            }
-                            if let Some(ref reason) = entry.reason {
-                                eprintln!("     Reason:  {}", reason);
-                            }
-                            eprintln!("\n     Trust has been explicitly withdrawn for this artifact.");
-                            std::process::exit(2);
-                        }
-                        "active" => {
-                            if artifact.is_sealed() {
-                                println!("  [OK] VERIFIED");
-                                println!("     Signed, Sealed, and Publicly Acknowledged.\n");
-                            } else {
-                                println!("  [OK] VERIFIED");
-                                println!("     Local file is Draft, but ID is confirmed in public ledger.\n");
-                            }
-                        }
-                        _ => {
-                            eprintln!("  [WARN] Artifact has unknown ledger status: {}", entry.status);
-                        }
-                    }
-                }
-                None => {
-                    if artifact.is_sealed() {
-                        eprintln!("  [WARN] SUSPICIOUS");
-                        eprintln!("     File claims to be Sealed, but is NOT in public ledger.");
-                        eprintln!("     Possible tampering or embargo.");
-                    } else {
-                        eprintln!("  [WARN] UNPUBLISHED");
-                        eprintln!("     Valid signature. Draft state. Not publicly acknowledged.");
-                    }
-                }
-            }
-        }
-        RegistryStatus::Unavailable(reason) => {
-            eprintln!("  [WARN] Registry unavailable: {}", reason);
-            eprintln!("     Signature verification still valid");
-            eprintln!("     Ledger status unknown");
-            // ARCH-1: crypto passed but registry unavailable → exit(3)
-            std::process::exit(3);
-        }
-    }
-
-
-    Ok(())
-}
-
-fn note(file: &PathBuf) -> Result<()> {
-    let bytes = fs::read(file).context("Failed to read artifact file")?;
-    let artifact = Artifact::from_bytes(&bytes).context("Failed to parse artifact")?;
-
-    if artifact.version != vwh_core::format::ArtifactVersion::V2 {
-        anyhow::bail!("Notes are only supported for V2 artifacts (this is a V1 artifact)");
-    }
-
-    if !artifact.has_note_hash() {
-        anyhow::bail!("This artifact has no note attached (note_hash is zero)");
-    }
-
-    let note_path = file.with_extension("vwh.note");
-
-    if !note_path.exists() {
-        anyhow::bail!(
-            "Note sidecar file not found: {}\nNote hash is present in artifact but file is missing.",
-            note_path.display()
-        );
-    }
-
-    let note_bytes = fs::read(&note_path).context("Failed to read note file")?;
-    let computed_hash = blake3::hash(&note_bytes);
-    let hash_ok = computed_hash.as_bytes() == &artifact.note_hash;
-
-    // CLI-C2: verify hash BEFORE displaying note content
-    if !hash_ok {
-        eprintln!("[ERR] Note hash mismatch — content may be tampered");
-        eprintln!("[ERR] Expected: {}", hex::encode(artifact.note_hash));
-        eprintln!("[ERR] Got:      {}", hex::encode(computed_hash.as_bytes()));
-        std::process::exit(2);
-    }
-
-    let note_text = String::from_utf8_lossy(&note_bytes);
-
-    println!();
-    print_sep();
-    println!("Note (BLAKE3 verified):\n");
-    println!("---");
-    println!("{}", note_text.trim());
-    println!("---\n");
-
-    print_sep();
+/// Stub handler for lifecycle commands not yet implemented in 4.0.0.
+fn not_yet_implemented(cmd: &str) -> Result<()> {
+    println!("vwh {cmd}: not yet implemented (coming in 4.x)");
     Ok(())
 }
 
 fn main() -> Result<()> {
+    // One-time relocation of an existing ~/.config/vwh-author keystore into
+    // ~/.vwh. Non-destructive and idempotent; safe to run on every invocation.
+    migrate::ensure_migrated()?;
+
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Inspect { file, offline, registry } => inspect(file, offline, registry),
+        // Inspector
+        Commands::Inspect { file, offline, registry } => inspect::inspect(file, offline, registry),
         Commands::Note { file } => {
-            if let Err(e) = note(&file) {
+            if let Err(e) = inspect::note(&file) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
             Ok(())
         }
+
+        // Keys
+        Commands::Key(key_cmd) => match key_cmd {
+            KeyCommands::Init { name, r#type, label } => {
+                let type_str = match r#type {
+                    Some(t) => t,
+                    None => crate::prompts::prompt_key_type()?,
+                };
+                let key_type = match type_str.to_lowercase().as_str() {
+                    "signing" => key::KeyType::Signing,
+                    "sealing" => key::KeyType::Sealing,
+                    _ => {
+                        eprintln!("Error: Invalid key type '{}'. Must be 'signing' or 'sealing'.", type_str);
+                        std::process::exit(1);
+                    }
+                };
+                key::init(name, key_type, label)
+            }
+            KeyCommands::Show { name } => key::show(name),
+            KeyCommands::Rotate => commands::key_rotate(),
+        },
+
+        // Revocation
+        Commands::Revoke(revoke_cmd) => match revoke_cmd {
+            RevokeCommands::Key { reason, note } => commands::key_revoke(reason, note),
+            RevokeCommands::Artifact { artifact_id, reason, note } => {
+                commands::artifact_revoke(artifact_id, reason, note)
+            }
+        },
+
+        // Authoring
+        Commands::Create { intent, output, v1 } => {
+            let intent_str = match intent {
+                Some(i) => i,
+                None => prompts::prompt_intent()?.to_string(),
+            };
+            let output_path = match output {
+                Some(o) => o,
+                None => prompts::prompt_output("artifact.vwh")?,
+            };
+            commands::create_draft(intent_str, output_path, v1)
+        }
+        Commands::Sign { file, key } => commands::sign(file, key),
+        Commands::Seal { file, key } => commands::seal(file, key),
+        Commands::Unseal { file } => commands::unseal(file),
+        Commands::Unsign { file } => commands::unsign(file),
+        Commands::Edit { file, intent, note } => commands::edit(file, intent, note),
+        Commands::Dump { target } => commands::dump(target),
+        Commands::Push => commands::push_registry(),
+
+        // Lifecycle stubs (4.x)
+        Commands::Init => not_yet_implemented("init"),
+        Commands::Config => not_yet_implemented("config"),
+        Commands::Rebase => not_yet_implemented("rebase"),
+        Commands::Export => not_yet_implemented("export"),
+        Commands::Restore => not_yet_implemented("restore"),
     }
 }
-
-

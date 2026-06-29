@@ -8,7 +8,7 @@ Core library for the VWH artifact format. This crate provides:
 - Artifact lifecycle state machine: Draft → Signed → Sealed
 - Key fingerprinting (BLAKE3)
 
-The public CLI (`vwh`) depends on this crate. The private authoring tool is intentionally not part of this repo.
+The `vwh` CLI, a single binary that both inspects and authors artifacts, depends on this crate. (Through 3.x, authoring lived in a separate unpublished `vwh-author` tool; 4.0 unified the two.)
 
 Windows prerequisite (when building from source or installing tools that depend on this crate):
 
