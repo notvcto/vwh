@@ -45,4 +45,4 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # Interactive UX (authoring)
 dialoguer = "0.12"
 console = "0.16"
-indicatif = "0.17"
+indicatif = "0.18"
