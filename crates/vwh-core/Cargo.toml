@@ -1,6 +1,6 @@
 [package]
 name = "vwh-core"
-version = "4.0.0"
+version = "4.0.1"
 authors = ["Victor Enrique Soto <contact@notvc.to>"]
 edition = "2021"
 description = "Cryptographic accountability tool for verifying digital presence."
@@ -19,4 +19,4 @@ serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 hex.workspace = true
-rand.workspace = true
+getrandom.workspace = true

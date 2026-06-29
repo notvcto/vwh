@@ -1,12 +1,11 @@
 use anyhow::{anyhow, Context, Result};
 use argon2::{Argon2, ParamsBuilder, Version};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
 use directories::BaseDirs;
 use ed25519_dalek::SigningKey;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::fs;
@@ -274,7 +273,9 @@ pub fn init(name: Option<String>, key_type: KeyType, label: Option<String>) -> R
     }
     
     // Generate keypair
-    let signing_key = SigningKey::generate(&mut OsRng);
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::fill(&mut *seed).context("OS entropy unavailable")?;
+    let signing_key = SigningKey::from_bytes(&seed);
     let verifying_key = signing_key.verifying_key();
     let public_key_bytes = verifying_key.to_bytes();
     let private_key_bytes = Zeroizing::new(signing_key.to_bytes());
@@ -284,7 +285,7 @@ pub fn init(name: Option<String>, key_type: KeyType, label: Option<String>) -> R
 
     // Generate 16-byte binary salt; store as hex
     let mut salt_bytes = [0u8; 16];
-    OsRng.fill_bytes(&mut salt_bytes);
+    getrandom::fill(&mut salt_bytes).context("OS entropy unavailable")?;
     let salt_hex = hex::encode(salt_bytes);
 
     // Derive encryption key using Argon2id
@@ -307,7 +308,7 @@ pub fn init(name: Option<String>, key_type: KeyType, label: Option<String>) -> R
     // Encrypt with ChaCha20Poly1305
     let cipher = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&*key_bytes));
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    getrandom::fill(&mut nonce_bytes).context("OS entropy unavailable")?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher

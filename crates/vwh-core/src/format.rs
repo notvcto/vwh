@@ -699,14 +699,19 @@ mod tests {
     use super::*;
     use crate::{crypto, Intent};
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+
+    fn random_signing_key() -> SigningKey {
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).unwrap();
+        SigningKey::from_bytes(&seed)
+    }
 
     fn make_author_key() -> SigningKey {
-        SigningKey::generate(&mut OsRng)
+        random_signing_key()
     }
 
     fn make_seal_key() -> SigningKey {
-        SigningKey::generate(&mut OsRng)
+        random_signing_key()
     }
 
     // --- V1 roundtrip ---

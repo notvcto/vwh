@@ -1,6 +1,6 @@
 [package]
 name = "vwh"
-version = "4.0.0"
+version = "4.0.1"
 authors = ["Victor Enrique Soto <contact@notvc.to>"]
 edition = "2021"
 description = "Cryptographic accountability tool for creating, signing, sealing, and verifying digital presence."
@@ -16,7 +16,7 @@ name = "vwh"
 path = "src/main.rs"
 
 [dependencies]
-vwh-core = { version = "4.0.0", path = "../vwh-core" }
+vwh-core = { version = "4.0.1", path = "../vwh-core" }
 
 # Serialization
 serde.workspace = true
@@ -39,7 +39,7 @@ reqwest.workspace = true
 ed25519-dalek.workspace = true
 chacha20poly1305.workspace = true
 argon2.workspace = true
-rand.workspace = true
+getrandom.workspace = true
 zeroize.workspace = true
 
 # Utilities

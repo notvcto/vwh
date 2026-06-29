@@ -6,8 +6,6 @@ use chacha20poly1305::{
 };
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
-use rand::RngCore;
-use rand::rngs::OsRng;
 use std::fs;
 use std::path::PathBuf;
 use vwh_core::{crypto, format::{Artifact, ArtifactBuilder, ArtifactVersion, ZERO_PUBKEY}, Intent};
@@ -663,14 +661,16 @@ pub fn key_rotate() -> Result<()> {
     }
 
     // Generate new Ed25519 keypair
-    let new_signing_key = SigningKey::generate(&mut OsRng);
+    let mut new_seed = Zeroizing::new([0u8; 32]);
+    getrandom::fill(&mut *new_seed).context("OS entropy unavailable")?;
+    let new_signing_key = SigningKey::from_bytes(&new_seed);
     let new_public_key = new_signing_key.verifying_key().to_bytes();
     let new_private_key = new_signing_key.to_bytes();
     let new_fingerprint = vwh_core::KeyFingerprint::new(&new_public_key);
 
     // Encrypt new private key
     let mut salt_bytes_new = [0u8; 16];
-    OsRng.fill_bytes(&mut salt_bytes_new);
+    getrandom::fill(&mut salt_bytes_new).context("OS entropy unavailable")?;
     let salt_hex_new = hex::encode(salt_bytes_new);
 
     let argon2_new = build_argon2()?;
@@ -682,7 +682,7 @@ pub fn key_rotate() -> Result<()> {
 
     let cipher_new = ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&*new_key_bytes));
     let mut nonce_bytes_new = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes_new);
+    getrandom::fill(&mut nonce_bytes_new).context("OS entropy unavailable")?;
     let nonce_new = Nonce::from_slice(&nonce_bytes_new);
 
     let ciphertext_new = cipher_new

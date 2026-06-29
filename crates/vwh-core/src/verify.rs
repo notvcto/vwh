@@ -24,11 +24,16 @@ mod tests {
     use crate::format::ArtifactBuilder;
     use crate::{crypto, Intent};
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+
+    fn test_signing_key() -> SigningKey {
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).unwrap();
+        SigningKey::from_bytes(&seed)
+    }
 
     #[test]
     fn test_verify_valid_artifact() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = test_signing_key();
         let public_key = signing_key.verifying_key().to_bytes();
 
         let builder = ArtifactBuilder::new(Intent::Lab, public_key);
@@ -42,7 +47,7 @@ mod tests {
 
     #[test]
     fn test_verify_invalid_signature() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = test_signing_key();
         let public_key = signing_key.verifying_key().to_bytes();
 
         let builder = ArtifactBuilder::new(Intent::Lab, public_key);

@@ -6,6 +6,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — Versioning:
 
 ---
 
+## [4.0.1] - 2026-06-29
+
+### Changed
+
+- **Dropped the `rand` dependency in favor of `getrandom`.** All randomness in the
+  project — artifact IDs (`ArtifactId::new`), Ed25519 key generation, and the
+  Argon2id salts / ChaCha20-Poly1305 nonces in the keystore — is now sourced
+  directly from the OS via `getrandom::fill`. `SigningKey::generate` is replaced by
+  seeding 32 bytes and calling `SigningKey::from_bytes`, an identical result with no
+  RNG trait plumbing. This removes a dependency and dissolves the
+  `ed25519-dalek` ↔ `rand_core` version conflict that blocked bumping `rand`.
+- No public API change and **no on-disk format change** — v2 (256-byte) artifacts
+  created by any 4.0.x release verify identically. Bytes out of the RNG are the same
+  shape; only their source crate changed.
+
+---
+
 ## [4.0.0] - 2026-06-29
 
 ### Breaking

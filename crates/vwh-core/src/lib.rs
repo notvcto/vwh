@@ -18,9 +18,8 @@ pub struct ArtifactId(pub [u8; 16]);
 
 impl ArtifactId {
     pub fn new() -> Self {
-        use rand::RngCore;
         let mut id = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut id);
+        getrandom::fill(&mut id).expect("OS entropy unavailable");
         Self(id)
     }
 
